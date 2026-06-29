@@ -1,5 +1,7 @@
 const STORAGE_KEY = "local-practice-web-v1";
-const BUILTIN_DATA_URL = "./data/modern-history-2026.json?v=20260628-rapid";
+const BUILTIN_DATA_VERSION = "20260629-multiple-choice";
+const BUILTIN_COLLECTION_ID = "collection-modern-history-2026";
+const BUILTIN_DATA_URL = `./data/modern-history-2026.json?v=${BUILTIN_DATA_VERSION}`;
 const letters = ["A", "B", "C", "D"];
 let wrongFilter = "all";
 
@@ -135,7 +137,8 @@ function loadState() {
     return {
       banks: Array.isArray(parsed.banks) ? parsed.banks : structuredClone(sampleBanks),
       collections: Array.isArray(parsed.collections) ? parsed.collections : [],
-      stats: parsed.stats && typeof parsed.stats === "object" ? parsed.stats : {}
+      stats: parsed.stats && typeof parsed.stats === "object" ? parsed.stats : {},
+      builtinDataVersion: parsed.builtinDataVersion || ""
     };
   } catch {
     return { banks: [], collections: [], stats: {} };
@@ -148,15 +151,24 @@ function saveState() {
 
 async function ensureBuiltinModernHistory() {
   const hasData = (state.collections && state.collections.length > 0) || state.banks.length > 0;
-  if (hasData) return;
+  const hasBuiltinCollection = (state.collections || []).some((collection) => collection.id === BUILTIN_COLLECTION_ID);
+  const shouldLoadBuiltin = !hasData || (hasBuiltinCollection && state.builtinDataVersion !== BUILTIN_DATA_VERSION);
+  if (!shouldLoadBuiltin) return;
 
   try {
     const response = await fetch(BUILTIN_DATA_URL);
     if (!response.ok) throw new Error("基础题库加载失败");
     const data = await response.json();
-    state.collections = [data.collection];
-    state.banks = data.banks;
+    state.collections = [
+      ...(state.collections || []).filter((collection) => collection.id !== BUILTIN_COLLECTION_ID),
+      data.collection
+    ];
+    state.banks = [
+      ...state.banks.filter((bank) => bank.collectionId !== BUILTIN_COLLECTION_ID && !String(bank.id).startsWith("modern-history-unit-")),
+      ...data.banks
+    ];
     state.stats = {};
+    state.builtinDataVersion = BUILTIN_DATA_VERSION;
     saveState();
     render();
   } catch (error) {
@@ -345,6 +357,9 @@ function renderPractice() {
   }
 
   const stats = getStats(question.id);
+  const selectedAnswers = selectedAnswerLetters();
+  const correctAnswers = answerLetters(question.answer);
+  const isMultipleChoice = question.type === "multiple";
   els.practiceSource.textContent = question.bankName || question.source || "题库";
   els.questionStem.textContent = question.question;
   els.progressText.textContent = `${practiceSession.index + 1}/${practiceSession.questionIds.length}`;
@@ -354,15 +369,15 @@ function renderPractice() {
   letters.forEach((letter) => {
     const button = document.createElement("button");
     button.className = "option-button";
-    if (practiceSession.selected === letter) button.classList.add("selected");
-    if (practiceSession.submitted && question.answer !== "UNKNOWN" && question.answer === letter) button.classList.add("correct");
-    if (practiceSession.submitted && question.answer !== "UNKNOWN" && practiceSession.selected === letter && question.answer !== letter) button.classList.add("wrong");
+    if (selectedAnswers.includes(letter)) button.classList.add("selected");
+    if (practiceSession.submitted && question.answer !== "UNKNOWN" && correctAnswers.includes(letter)) button.classList.add("correct");
+    if (practiceSession.submitted && question.answer !== "UNKNOWN" && selectedAnswers.includes(letter) && !correctAnswers.includes(letter)) button.classList.add("wrong");
     button.disabled = practiceSession.submitted;
     button.innerHTML = `<span class="option-letter">${letter}</span><span>${escapeHTML(question.options[letter])}</span>`;
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       if (!practiceSession.submitted) {
-        chooseAnswer(letter);
+        chooseAnswer(letter, isMultipleChoice);
       }
     });
     els.optionList.append(button);
@@ -370,7 +385,7 @@ function renderPractice() {
 
   if (practiceSession.submitted) {
     const hasKnownAnswer = question.answer !== "UNKNOWN";
-    const isCorrect = hasKnownAnswer && practiceSession.selected === question.answer;
+    const isCorrect = hasKnownAnswer && isAnswerCorrect(practiceSession.selected, question.answer);
     els.answerPanel.classList.add("hidden");
     els.answerResult.textContent = hasKnownAnswer ? (isCorrect ? "回答正确" : "回答错误") : "已记录";
     els.answerResult.style.color = hasKnownAnswer ? (isCorrect ? "var(--good)" : "var(--bad)") : "var(--warn)";
@@ -382,7 +397,7 @@ function renderPractice() {
     els.removeWrongButton.classList.toggle("hidden", !(stats.isWrong && stats.consecutiveCorrect >= 2));
   } else {
     els.answerPanel.classList.add("hidden");
-    els.submitButton.textContent = "下一题";
+    els.submitButton.textContent = isMultipleChoice ? "确认并下一题" : "下一题";
     els.submitButton.disabled = false;
     els.submitButton.classList.remove("hidden");
     els.removeWrongButton.classList.add("hidden");
@@ -434,7 +449,19 @@ function startPractice(title, questionIds, mode) {
   renderPractice();
 }
 
-function chooseAnswer(letter) {
+function chooseAnswer(letter, isMultipleChoice = false) {
+  if (isMultipleChoice) {
+    const selected = new Set(selectedAnswerLetters());
+    if (selected.has(letter)) {
+      selected.delete(letter);
+    } else {
+      selected.add(letter);
+    }
+    practiceSession.selected = normalizeAnswerString([...selected].join(""));
+    renderPractice();
+    return;
+  }
+
   practiceSession.selected = letter;
   recordCurrentAnswer();
 }
@@ -446,7 +473,7 @@ function recordCurrentAnswer() {
   if (!practiceSession.submitted) {
     const stats = getStats(question.id);
     const hasKnownAnswer = question.answer !== "UNKNOWN";
-    const isCorrect = hasKnownAnswer && practiceSession.selected === question.answer;
+    const isCorrect = hasKnownAnswer && isAnswerCorrect(practiceSession.selected, question.answer);
     stats.attempts += 1;
     stats.lastAnsweredAt = new Date().toISOString();
     if (!hasKnownAnswer) {
@@ -488,7 +515,30 @@ function previousQuestion() {
 }
 
 function submitOrNext() {
+  const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
+  if (question?.type === "multiple" && !practiceSession.submitted && practiceSession.selected) {
+    recordCurrentAnswer();
+  }
   nextQuestion();
+}
+
+function answerLetters(answer) {
+  if (!answer || answer === "UNKNOWN") return [];
+  return normalizeAnswerString(answer).split("");
+}
+
+function selectedAnswerLetters() {
+  return answerLetters(practiceSession.selected);
+}
+
+function normalizeAnswerString(answer) {
+  return [...new Set(String(answer || "").toUpperCase().match(/[A-D]/g) || [])].sort().join("");
+}
+
+function isAnswerCorrect(selected, correct) {
+  const normalizedSelected = normalizeAnswerString(selected);
+  const normalizedCorrect = normalizeAnswerString(correct);
+  return Boolean(normalizedCorrect) && normalizedSelected === normalizedCorrect;
 }
 
 async function handleFile(file) {
@@ -645,10 +695,20 @@ async function extractPDFQuestions(file) {
     allowUnknownAnswer: true
   });
   const answers = await extractPDFUnderlinedAnswers(file);
+  let answerCursor = 0;
 
   questions.forEach((question, index) => {
-    if (answers[index]) {
-      question.answer = answers[index];
+    const matchedAnswerIndex = answers.findIndex((entry, entryIndex) => {
+      return entryIndex >= answerCursor && entry.type === question.type && entry.rowNumber === question.rowNumber;
+    });
+    const matchedAnswer = matchedAnswerIndex >= 0 ? answers[matchedAnswerIndex].answer : "";
+
+    if (matchedAnswerIndex >= 0) {
+      answerCursor = matchedAnswerIndex + 1;
+    }
+
+    if (matchedAnswer) {
+      question.answer = matchedAnswer;
       if (question.explanation === "PDF 未能识别原文中的下划线/斜体答案标记。") {
         question.explanation = "";
       }
@@ -676,16 +736,19 @@ async function extractPDFUnderlinedAnswers(file) {
     return [];
   }
 
-  const answers = [];
-  const sectionState = { isSingleChoice: false };
+  const sectionState = { choiceType: null, answers: [], currentEntry: null };
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
     const underlines = await extractPageUnderlineSegments(page, PDFReader);
-    answers.push(...matchUnderlinesToOptionLetters(content.items, underlines, sectionState));
+    matchUnderlinesToOptionLetters(content.items, underlines, sectionState);
   }
 
-  return answers;
+  return sectionState.answers.map((entry) => ({
+    type: entry.type,
+    rowNumber: entry.rowNumber,
+    answer: normalizeAnswerString([...entry.letters].join(""))
+  }));
 }
 
 async function extractPageUnderlineSegments(page, PDFReader) {
@@ -756,8 +819,8 @@ async function extractPageUnderlineSegments(page, PDFReader) {
     .sort((a, b) => b.y - a.y || a.x0 - b.x0);
 }
 
-function matchUnderlinesToOptionLetters(items, underlines, sectionState = { isSingleChoice: true }) {
-  const lineStates = buildSingleChoiceLineStates(items, sectionState);
+function matchUnderlinesToOptionLetters(items, underlines, sectionState = { choiceType: null, answers: [], currentEntry: null }) {
+  const { lineStates, questionStarts } = buildChoiceLineStates(items, sectionState);
   const markers = [];
 
   items.forEach((item) => {
@@ -802,12 +865,29 @@ function matchUnderlinesToOptionLetters(items, underlines, sectionState = { isSi
     }
   });
 
-  return matched
+  matched
     .sort((a, b) => b.y - a.y || a.x - b.x)
-    .map((marker) => marker.letter);
+    .forEach((marker) => {
+      const entry = findAnswerEntryForMarker(marker, questionStarts, sectionState);
+      if (entry) {
+        entry.letters.add(marker.letter);
+      }
+    });
 }
 
-function buildSingleChoiceLineStates(items, sectionState) {
+function findAnswerEntryForMarker(marker, questionStarts, sectionState) {
+  const matchingStart = questionStarts
+    .filter((question) => question.y >= marker.y - 8)
+    .sort((a, b) => Math.abs(marker.y - a.y) - Math.abs(marker.y - b.y))[0];
+
+  if (matchingStart) {
+    return matchingStart.entry;
+  }
+
+  return sectionState.currentEntry;
+}
+
+function buildChoiceLineStates(items, sectionState) {
   const lineMap = new Map();
 
   items.forEach((item) => {
@@ -822,21 +902,37 @@ function buildSingleChoiceLineStates(items, sectionState) {
   });
 
   const lineStates = new Map();
+  const questionStarts = [];
   const lines = [...lineMap.entries()]
     .map(([y, parts]) => ({ y, text: parts.join(" ") }))
     .sort((a, b) => b.y - a.y);
 
   lines.forEach((line) => {
     if (/单项选择题|单选题/.test(line.text)) {
-      sectionState.isSingleChoice = true;
-    } else if (/多项选择题|多选题|判断题|简答题|论述题|材料|参考答案|答案要点|课后习题/.test(line.text)) {
-      sectionState.isSingleChoice = false;
+      sectionState.choiceType = "single";
+    } else if (/多项选择题|多选题/.test(line.text)) {
+      sectionState.choiceType = "multiple";
+    } else if (/判断题|简答题|论述题|材料|参考答案|答案要点|课后习题/.test(line.text)) {
+      sectionState.choiceType = null;
+      sectionState.currentEntry = null;
     }
 
-    lineStates.set(line.y, sectionState.isSingleChoice);
+    const questionMatch = line.text.match(/^(\d{1,3})\s*[.、．]\s*/);
+    if (sectionState.choiceType && questionMatch) {
+      const entry = {
+        type: sectionState.choiceType,
+        rowNumber: Number(questionMatch[1]),
+        letters: new Set()
+      };
+      sectionState.answers.push(entry);
+      sectionState.currentEntry = entry;
+      questionStarts.push({ y: line.y, entry });
+    }
+
+    lineStates.set(line.y, sectionState.choiceType);
   });
 
-  return lineStates;
+  return { lineStates, questionStarts };
 }
 
 function pdfItemsToText(items) {
@@ -972,7 +1068,7 @@ function parseNumberedChoiceQuestions(text, format = "PDF", options = {}) {
   const lines = normalized.split("\n").map((line) => line.trim()).filter(Boolean);
   const blocks = [];
   let current = null;
-  let isSingleChoiceSection = false;
+  let currentChoiceType = null;
   let currentChapter = options.source || "PDF 导入题库";
 
   lines.forEach((line) => {
@@ -982,18 +1078,27 @@ function parseNumberedChoiceQuestions(text, format = "PDF", options = {}) {
     }
 
     if (/单项选择题|单选题/.test(line)) {
-      isSingleChoiceSection = true;
-      return;
-    }
-
-    if (/多项选择题|多选题|判断题|简答题|论述题|材料|参考答案|答案要点|课后习题/.test(line)) {
       if (current) blocks.push(current);
       current = null;
-      isSingleChoiceSection = false;
+      currentChoiceType = "single";
       return;
     }
 
-    if (!isSingleChoiceSection) {
+    if (/多项选择题|多选题/.test(line)) {
+      if (current) blocks.push(current);
+      current = null;
+      currentChoiceType = "multiple";
+      return;
+    }
+
+    if (/判断题|简答题|论述题|材料|参考答案|答案要点|课后习题/.test(line)) {
+      if (current) blocks.push(current);
+      current = null;
+      currentChoiceType = null;
+      return;
+    }
+
+    if (!currentChoiceType) {
       return;
     }
 
@@ -1002,6 +1107,7 @@ function parseNumberedChoiceQuestions(text, format = "PDF", options = {}) {
       if (current) blocks.push(current);
       current = {
         rowNumber: Number(questionMatch[1]),
+        type: currentChoiceType,
         source: currentChapter,
         lines: [questionMatch[2]]
       };
@@ -1069,7 +1175,7 @@ function parseNumberedChoiceBlock(block, fallbackRowNumber, format, options) {
     options: optionValues,
     answer: "",
     explanation: "PDF 未能识别原文中的下划线/斜体答案标记。",
-    type: "single",
+    type: block.type || "single",
     source: block.source || options.source
   }, block.rowNumber || fallbackRowNumber, format, {
     ...options,
@@ -1079,8 +1185,9 @@ function parseNumberedChoiceBlock(block, fallbackRowNumber, format, options) {
 
 function normalizeQuestion(row, rowNumber, format, parseOptions = {}) {
   const question = String(row.question || "").trim();
-  const answer = String(row.answer || "").trim().toUpperCase();
-  const type = String(row.type || "single").trim().toLowerCase();
+  const answer = normalizeAnswerString(row.answer);
+  const rawType = String(row.type || "single").trim().toLowerCase();
+  const type = ["multiple", "multiplechoice", "multi", "多选", "多选题", "多项选择题"].includes(rawType) ? "multiple" : "single";
   const answerOptions = {
     A: String(row.options.A || "").trim(),
     B: String(row.options.B || "").trim(),
@@ -1092,19 +1199,17 @@ function normalizeQuestion(row, rowNumber, format, parseOptions = {}) {
   letters.forEach((letter) => {
     if (!answerOptions[letter]) throw new Error(`${format} 第 ${rowNumber} 题缺少选项 ${letter}。`);
   });
-  if (answer && !letters.includes(answer)) throw new Error(`${format} 第 ${rowNumber} 题答案必须是 A、B、C、D。`);
+  if (answer && !/^[A-D]{1,4}$/.test(answer)) throw new Error(`${format} 第 ${rowNumber} 题答案必须由 A、B、C、D 组成。`);
   if (!answer && !parseOptions.allowUnknownAnswer) throw new Error(`${format} 第 ${rowNumber} 题缺少答案。`);
-  if (type && !["single", "singlechoice", "单选", "单选题"].includes(type)) {
-    throw new Error(`${format} 第 ${rowNumber} 题暂只支持单选题。`);
-  }
 
   return {
     question,
     options: answerOptions,
     answer: answer || "UNKNOWN",
     explanation: String(row.explanation || "").trim(),
-    type: "single",
-    source: String(row.source || "导入题库").trim()
+    type,
+    source: String(row.source || "导入题库").trim(),
+    rowNumber
   };
 }
 
