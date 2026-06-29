@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>刷题</title>
+  <link rel="stylesheet" href="./styles.css?v=20260629-minimal">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <main class="main">
+      <section id="banksView" class="view active-view">
+        <div class="home-hero">
+          <p class="app-mark">QUIZ · 本地题库</p>
+          <h1>本地刷题系统</h1>
+          <p>导入题库，按单元刷题，自动记录错题并复刷。</p>
+          <button id="importButton" class="import-button" type="button">导入题库</button>
+          <input id="fileInput" type="file" accept=".json,.csv,.txt,.docx,.pdf" hidden>
+          <p class="support-text">支持 JSON / CSV / TXT / DOCX / PDF</p>
+        </div>
+
+        <div class="list-heading">
+          <p>QUESTION BANK</p>
+          <h2>题库列表</h2>
+        </div>
+        <div id="bankList" class="bank-list"></div>
+      </section>
+
+      <section id="unitsView" class="view">
+        <div class="page-heading">
+          <div>
+            <button id="backToCollections" class="inline-back">← 返回题库</button>
+            <h2 id="collectionTitle">合集</h2>
+            <p id="collectionOverview">0 个单元</p>
+          </div>
+          <button id="startCollectionRandom" class="primary-button">随机刷合集</button>
+        </div>
+        <div id="unitList" class="bank-list"></div>
+      </section>
+
+      <section id="practiceView" class="view">
+        <div class="practice-topbar">
+          <button id="backToBanks" class="inline-back">← 返回</button>
+          <h2>刷题</h2>
+          <div class="practice-mode" hidden>
+            <button id="modeOrder" class="segmented active" data-mode="order">顺序</button>
+            <button id="modeRandom" class="segmented" data-mode="random">随机</button>
+          </div>
+        </div>
+
+        <article class="practice-layout">
+          <header class="question-header">
+            <div>
+              <p id="practiceSource" class="eyebrow">题库</p>
+              <h2 id="questionStem"></h2>
+            </div>
+            <div class="progress-box">
+              <span id="progressText">0/0</span>
+              <button id="favoriteButton" class="icon-button" title="收藏题目" aria-label="收藏题目">☆</button>
+            </div>
+          </header>
+
+          <div id="optionList" class="option-list"></div>
+
+          <section id="answerPanel" class="answer-panel hidden">
+            <h3 id="answerResult"></h3>
+            <p id="correctAnswer"></p>
+            <p id="explanation"></p>
+            <button id="removeWrongButton" class="ghost-button hidden">从错题本移除</button>
+          </section>
+
+          <div class="practice-actions">
+            <button id="previousButton" class="ghost-button" type="button">上一题</button>
+            <button id="submitButton" class="primary-button" type="button">下一题</button>
+          </div>
+        </article>
+      </section>
+
+      <section id="wrongView" class="view">
+        <div class="page-heading">
+          <div>
+            <h2>错题本</h2>
+            <p id="wrongOverview">0 道错题</p>
+          </div>
+        </div>
+        <div class="filter-tabs" aria-label="错题筛选">
+          <button class="filter-tab active" data-wrong-filter="all">全部</button>
+          <button class="filter-tab" data-wrong-filter="unmastered">未掌握</button>
+          <button class="filter-tab" data-wrong-filter="mastered">已掌握</button>
+        </div>
+        <div id="wrongList" class="question-list"></div>
+      </section>
+
+      <section id="settingsView" class="view">
+        <div class="page-heading">
+          <div>
+            <h2>设置</h2>
+            <p>本地数据</p>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button id="exportButton" class="ghost-button">导出数据</button>
+          <button id="resetProgressButton" class="ghost-button">清空答题记录</button>
+          <button id="clearAllButton" class="danger-button">清空所有数据</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <nav class="bottom-tabs" aria-label="页面">
+    <button class="nav-tab active" data-view="banks">刷题</button>
+    <button class="nav-tab" data-view="wrong">错题本</button>
+    <button class="nav-tab" data-view="settings">统计</button>
+  </nav>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script src="./vendor/jszip.min.js"></script>
+  <script src="./vendor/jszip-global.js"></script>
+  <script src="./vendor/pdf.min.js"></script>
+  <script src="./vendor/pdf-global.js"></script>
+  <script src="./app.js?v=20260629-minimal"></script>
+</body>
+</html>
