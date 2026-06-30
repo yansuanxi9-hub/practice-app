@@ -311,9 +311,10 @@ function normalizeAllQuestionAnswerMetadata(banks = state.banks) {
 }
 
 function normalizeQuestionAnswerMetadata(question) {
-  const normalized = normalizeAnswerForType(question.answer, question.type);
-  question.importedAnswer = normalizeAnswerForType(question.importedAnswer || normalized, question.type);
-  if (!normalized || question.answer === "UNKNOWN") {
+  const normalized = getCorrectAnswer(question).answer;
+  const importedAnswer = normalizeAnswer(question.importedAnswer || question.answer || question.correctAnswer || question.legacyAnswer, question.type);
+  question.importedAnswer = importedAnswer || "";
+  if (!normalized) {
     question.answer = "";
     question.answerSource = question.answerSource || "unknown";
     question.answerConfidence = question.answerConfidence || "low";
@@ -321,8 +322,8 @@ function normalizeQuestionAnswerMetadata(question) {
   }
 
   question.answer = normalized;
-  question.answerSource = question.answerSource || "imported";
-  question.answerConfidence = question.answerConfidence || "low";
+  question.answerSource = question.answerSource === "unknown" ? "legacy" : (question.answerSource || "legacy");
+  question.answerConfidence = question.answerConfidence === "low" ? "medium" : (question.answerConfidence || "medium");
   return question;
 }
 
@@ -331,31 +332,36 @@ function getAnswerOverride(questionId) {
 }
 
 function getEffectiveAnswer(question) {
+  return getCorrectAnswer(question);
+}
+
+function getCorrectAnswer(question) {
   const override = getAnswerOverride(question.id);
-  if (override?.answer) {
+  const manualAnswer = normalizeAnswer(override?.answer || question.manualAnswer, question.type);
+  if (manualAnswer) {
     return {
-      answer: normalizeAnswerForType(override.answer, question.type),
+      answer: manualAnswer,
       source: "manual",
       confidence: "high"
     };
   }
 
-  const answer = normalizeAnswerForType(question.answer, question.type);
-  if (answer) {
-    return {
-      answer,
-      source: question.answerSource || "imported",
-      confidence: question.answerConfidence || "low"
-    };
-  }
+  const candidates = [
+    ["answer", question.answer],
+    ["correctAnswer", question.correctAnswer],
+    ["imported", question.importedAnswer],
+    ["legacy", question.legacyAnswer]
+  ];
 
-  const importedAnswer = normalizeAnswerForType(question.importedAnswer, question.type);
-  if (importedAnswer) {
-    return {
-      answer: importedAnswer,
-      source: "imported",
-      confidence: question.answerConfidence || "low"
-    };
+  for (const [source, rawAnswer] of candidates) {
+    const answer = normalizeAnswer(rawAnswer, question.type);
+    if (answer) {
+      return {
+        answer,
+        source: question.answerSource && question.answerSource !== "unknown" ? question.answerSource : source,
+        confidence: question.answerConfidence && question.answerConfidence !== "low" ? question.answerConfidence : "medium"
+      };
+    }
   }
 
   return { answer: "", source: "unknown", confidence: "low" };
@@ -363,7 +369,7 @@ function getEffectiveAnswer(question) {
 
 function hasReliableAnswer(question) {
   const answer = getEffectiveAnswer(question);
-  return Boolean(answer.answer) && answer.confidence !== "low";
+  return Boolean(answer.answer);
 }
 
 function buildQuestionDataErrorReport() {
@@ -399,7 +405,6 @@ function getQuestionAnswerIssue(question) {
   const answer = effective.answer;
   if (effective.source === "manual" && effective.confidence === "high") return "";
   if (!answer) return "答案未识别";
-  if (effective.confidence === "low") return "低置信度答案，需人工核对";
   if (question.type === "single" && answer.length !== 1) return "题型与答案不匹配";
   if (question.type === "multiple" && !/^[A-D]{2,4}$/.test(answer)) return "多选题答案异常";
   if (/疑似|未识别|异常/.test(question.explanation || "")) return "解析提示异常";
@@ -813,7 +818,7 @@ function renderPractice() {
 
   if (practiceSession.submitted) {
     const reliable = hasReliableAnswer(question);
-    const isCorrect = reliable && isAnswerCorrect(practiceSession.selected, effectiveAnswer.answer);
+    const isCorrect = reliable && isAnswerCorrect(practiceSession.selected, effectiveAnswer.answer, question.type);
     els.answerPanel.classList.toggle("hidden", reliable && isCorrect && question.type !== "short");
     els.answerResult.textContent = reliable ? (isCorrect ? "回答正确" : "回答错误") : "答案待校对";
     els.answerResult.style.color = reliable ? (isCorrect ? "var(--good)" : "var(--bad)") : "var(--warn)";
@@ -1074,7 +1079,7 @@ function recordCurrentAnswer() {
     const stats = getStats(question.id);
     const reliable = hasReliableAnswer(question);
     const effectiveAnswer = getEffectiveAnswer(question);
-    const isCorrect = reliable && isAnswerCorrect(practiceSession.selected, effectiveAnswer.answer);
+    const isCorrect = reliable && isAnswerCorrect(practiceSession.selected, effectiveAnswer.answer, question.type);
     stats.attempts += 1;
     stats.lastAnsweredAt = new Date().toISOString();
     if (!reliable) {
@@ -1207,7 +1212,7 @@ function advanceFromBlankTap() {
 
 function answerLetters(answer) {
   if (!answer || answer === "UNKNOWN") return [];
-  return normalizeAnswerForType(answer, "multiple").split("");
+  return normalizeAnswer(answer, "multiple", { allowSingleMultiple: true }).split("");
 }
 
 function selectedAnswerLetters() {
@@ -1215,25 +1220,50 @@ function selectedAnswerLetters() {
 }
 
 function normalizeAnswerString(answer) {
-  return [...new Set(String(answer || "").toUpperCase().match(/[A-D]/g) || [])].sort().join("");
+  return normalizeAnswer(answer, "multiple", { allowSingleMultiple: true });
+}
+
+function normalizeAnswer(rawAnswer, questionType = "single", options = {}) {
+  if (rawAnswer === null || rawAnswer === undefined || rawAnswer === "UNKNOWN") return "";
+  if (questionType === "short") return String(rawAnswer || "").trim();
+
+  let text = String(rawAnswer)
+    .trim()
+    .replace(/[：:]/g, ":")
+    .replace(/[，,、。.;；\s]+/g, "")
+    .replace(/[（）()【】\[\]{}]/g, "")
+    .toUpperCase();
+
+  text = text
+    .replace(/^参考?答案[:：]?/i, "")
+    .replace(/^正确答案[:：]?/i, "")
+    .replace(/^答案[:：]?/i, "")
+    .replace(/^ANSWER[:：]?/i, "");
+
+  if (questionType === "judge") {
+    if (/^(正确|对|TRUE|T|YES|Y|√)$/.test(text)) return "A";
+    if (/^(错误|错|FALSE|F|NO|N|×|X)$/.test(text)) return "B";
+  }
+
+  const lettersOnly = [...new Set(text.match(/[A-D]/g) || [])].sort().join("");
+  if (!lettersOnly) return "";
+  if (questionType === "single" || questionType === "judge") return lettersOnly.length === 1 ? lettersOnly : "";
+  if (questionType === "multiple") {
+    if (lettersOnly.length >= 2 || options.allowSingleMultiple) return lettersOnly;
+    return "";
+  }
+  return lettersOnly;
 }
 
 function normalizeAnswerForType(answer, type = "single") {
   if (!answer || answer === "UNKNOWN") return "";
   if (type === "short") return String(answer || "").trim();
-  if (type === "judge") {
-    const raw = String(answer || "").trim().toUpperCase();
-    if (/^(正确|对|TRUE|T|YES|Y|√)$/.test(raw)) return "A";
-    if (/^(错误|错|FALSE|F|NO|N|×|X)$/.test(raw)) return "B";
-  }
-  const normalized = normalizeAnswerString(answer);
-  if (type === "single" || type === "judge") return normalized.slice(0, 1);
-  return normalized;
+  return normalizeAnswer(answer, type);
 }
 
-function isAnswerCorrect(selected, correct) {
-  const normalizedSelected = normalizeAnswerString(selected);
-  const normalizedCorrect = normalizeAnswerString(correct);
+function isAnswerCorrect(selected, correct, type = "multiple") {
+  const normalizedSelected = normalizeAnswer(selected, type, { allowSingleMultiple: true });
+  const normalizedCorrect = normalizeAnswer(correct, type, { allowSingleMultiple: true });
   return Boolean(normalizedCorrect) && normalizedSelected === normalizedCorrect;
 }
 
@@ -1241,7 +1271,7 @@ function scheduleAutoNext(questionId) {
   window.clearTimeout(scheduleAutoNext.timer);
   scheduleAutoNext.timer = window.setTimeout(() => {
     const current = getQuestion(practiceSession.questionIds[practiceSession.index]);
-    if (current?.id === questionId && practiceSession.submitted && hasReliableAnswer(current) && isAnswerCorrect(practiceSession.selected, getEffectiveAnswer(current).answer)) {
+    if (current?.id === questionId && practiceSession.submitted && hasReliableAnswer(current) && isAnswerCorrect(practiceSession.selected, getEffectiveAnswer(current).answer, current.type)) {
       nextQuestion();
     }
   }, 650);
