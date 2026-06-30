@@ -228,6 +228,14 @@ function getQuestionSourceText(question) {
   return `${bank?.collectionId ? "近代史纲要" : "题库"}｜${bank?.name || question.source || "未命名单元"}`;
 }
 
+function getShortChapterLabel(question) {
+  const bank = getBankByQuestionId(question.id);
+  const source = bank?.name || question.source || "题库";
+  const chapter = source.match(/第[一二三四五六七八九十]+章/);
+  if (chapter) return chapter[0];
+  return source.length > 8 ? source.slice(0, 8) : source;
+}
+
 function getStats(questionId) {
   if (!state.stats[questionId]) {
     state.stats[questionId] = {
@@ -510,8 +518,8 @@ function renderPractice() {
   const selectedAnswers = selectedAnswerLetters();
   const correctAnswers = answerLetters(question.answer);
   const isMultipleChoice = question.type === "multiple";
-  els.practiceSource.textContent = question.bankName || question.source || "题库";
-  els.questionTypeMeta.textContent = `${getQuestionTypeLabel(question.type)}｜${getQuestionSourceText(question)}`;
+  els.practiceSource.textContent = "";
+  els.questionTypeMeta.textContent = `${getShortChapterLabel(question)} · ${getQuestionTypeLabel(question.type)}`;
   els.questionStem.textContent = question.question;
   els.progressText.textContent = `${practiceSession.index + 1}/${practiceSession.questionIds.length}`;
   els.favoriteButton.textContent = stats.isFavorite ? "★" : "☆";
@@ -1560,6 +1568,7 @@ function deleteCollection(collectionId) {
 function showView(name) {
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("active-view"));
   document.querySelectorAll(".nav-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.view === name));
+  document.body.classList.toggle("is-practice-view", name === "practice");
   document.querySelector(`#${name}View`).classList.add("active-view");
   render();
 }

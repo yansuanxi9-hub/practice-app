@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>刷题</title>
-  <link rel="stylesheet" href="./styles.css?v=20260630-optimized">
+  <link rel="stylesheet" href="./styles.css?v=20260630-compact">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -56,7 +56,8 @@
       <section id="practiceView" class="view">
         <div class="practice-topbar">
           <button id="backToBanks" class="inline-back">← 返回</button>
-          <h2>刷题</h2>
+          <span id="progressText">0/0</span>
+          <button id="favoriteButton" class="icon-button" title="收藏题目" aria-label="收藏题目">☆</button>
           <div class="practice-mode" hidden>
             <button id="modeOrder" class="segmented active" data-mode="order">顺序</button>
             <button id="modeRandom" class="segmented" data-mode="random">随机</button>
@@ -66,13 +67,9 @@
         <article class="practice-layout">
           <header class="question-header">
             <div>
-          <p id="practiceSource" class="eyebrow">题库</p>
+              <p id="practiceSource" class="eyebrow hidden">题库</p>
               <p id="questionTypeMeta" class="type-meta">单选题｜题库</p>
               <h2 id="questionStem"></h2>
-            </div>
-            <div class="progress-box">
-              <span id="progressText">0/0</span>
-              <button id="favoriteButton" class="icon-button" title="收藏题目" aria-label="收藏题目">☆</button>
             </div>
           </header>
 
@@ -154,6 +151,6 @@
   <script src="./vendor/jszip-global.js"></script>
   <script src="./vendor/pdf.min.js"></script>
   <script src="./vendor/pdf-global.js"></script>
-  <script src="./app.js?v=20260630-optimized"></script>
+  <script src="./app.js?v=20260630-compact"></script>
 </body>
 </html>
