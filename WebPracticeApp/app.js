@@ -1,5 +1,5 @@
 const STORAGE_KEY = "local-practice-web-v1";
-const BUILTIN_DATA_VERSION = "20260629-multiple-choice";
+const BUILTIN_DATA_VERSION = "20260630-answer-progress";
 const BUILTIN_COLLECTION_ID = "collection-modern-history-2026";
 const BUILTIN_DATA_URL = `./data/modern-history-2026.json?v=${BUILTIN_DATA_VERSION}`;
 const letters = ["A", "B", "C", "D"];
@@ -88,16 +88,28 @@ let practiceSession = {
   bankId: null,
   collectionId: null,
   title: "",
+  sourceTitle: "",
   questionIds: [],
   index: 0,
   selected: null,
   submitted: false,
-  mode: "order"
+  mode: "order",
+  sessionType: "bank"
 };
+let favoriteBankFilter = "all";
+let favoriteTypeFilter = "all";
+let wrongBankFilter = "all";
+let wrongTypeFilter = "all";
 
 const els = {
   importButton: document.querySelector("#importButton"),
   fileInput: document.querySelector("#fileInput"),
+  continueCard: document.querySelector("#continueCard"),
+  quickRandom: document.querySelector("#quickRandom"),
+  quickUnits: document.querySelector("#quickUnits"),
+  quickWrong: document.querySelector("#quickWrong"),
+  quickFavorite: document.querySelector("#quickFavorite"),
+  recentList: document.querySelector("#recentList"),
   bankList: document.querySelector("#bankList"),
   unitList: document.querySelector("#unitList"),
   collectionTitle: document.querySelector("#collectionTitle"),
@@ -111,13 +123,21 @@ const els = {
   optionList: document.querySelector("#optionList"),
   questionStem: document.querySelector("#questionStem"),
   practiceSource: document.querySelector("#practiceSource"),
+  questionTypeMeta: document.querySelector("#questionTypeMeta"),
   progressText: document.querySelector("#progressText"),
+  selectionHint: document.querySelector("#selectionHint"),
   answerPanel: document.querySelector("#answerPanel"),
   practiceLayout: document.querySelector(".practice-layout"),
   answerResult: document.querySelector("#answerResult"),
   correctAnswer: document.querySelector("#correctAnswer"),
   explanation: document.querySelector("#explanation"),
   favoriteButton: document.querySelector("#favoriteButton"),
+  favoriteOverview: document.querySelector("#favoriteOverview"),
+  favoriteList: document.querySelector("#favoriteList"),
+  favoriteBankFilter: document.querySelector("#favoriteBankFilter"),
+  favoriteTypeFilter: document.querySelector("#favoriteTypeFilter"),
+  wrongBankFilter: document.querySelector("#wrongBankFilter"),
+  wrongTypeFilter: document.querySelector("#wrongTypeFilter"),
   removeWrongButton: document.querySelector("#removeWrongButton"),
   backToBanks: document.querySelector("#backToBanks"),
   toast: document.querySelector("#toast"),
@@ -129,7 +149,7 @@ const els = {
 function loadState() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (!saved) {
-    return { banks: [], collections: [], stats: {} };
+    return defaultState();
   }
 
   try {
@@ -138,11 +158,17 @@ function loadState() {
       banks: Array.isArray(parsed.banks) ? parsed.banks : structuredClone(sampleBanks),
       collections: Array.isArray(parsed.collections) ? parsed.collections : [],
       stats: parsed.stats && typeof parsed.stats === "object" ? parsed.stats : {},
+      practiceProgress: parsed.practiceProgress || null,
+      recentPractices: Array.isArray(parsed.recentPractices) ? parsed.recentPractices : [],
       builtinDataVersion: parsed.builtinDataVersion || ""
     };
   } catch {
-    return { banks: [], collections: [], stats: {} };
+    return defaultState();
   }
+}
+
+function defaultState() {
+  return { banks: [], collections: [], stats: {}, practiceProgress: null, recentPractices: [], builtinDataVersion: "" };
 }
 
 function saveState() {
@@ -184,6 +210,24 @@ function getQuestion(id) {
   return getAllQuestions().find((question) => question.id === id);
 }
 
+function getBankByQuestionId(questionId) {
+  return state.banks.find((bank) => bank.questions.some((question) => question.id === questionId));
+}
+
+function getQuestionTypeLabel(type) {
+  return ({
+    single: "单选题",
+    multiple: "多选题",
+    judge: "判断题",
+    short: "简答题"
+  })[type] || "单选题";
+}
+
+function getQuestionSourceText(question) {
+  const bank = getBankByQuestionId(question.id);
+  return `${bank?.collectionId ? "近代史纲要" : "题库"}｜${bank?.name || question.source || "未命名单元"}`;
+}
+
 function getStats(questionId) {
   if (!state.stats[questionId]) {
     state.stats[questionId] = {
@@ -192,6 +236,8 @@ function getStats(questionId) {
       consecutiveCorrect: 0,
       isWrong: false,
       isFavorite: false,
+      isMastered: false,
+      memoryState: "",
       lastAnsweredAt: null
     };
   }
@@ -199,9 +245,12 @@ function getStats(questionId) {
 }
 
 function render() {
+  renderContinueCard();
+  renderRecent();
   renderBanks();
   renderUnits();
   renderWrong();
+  renderFavorites();
   if (document.querySelector("#practiceView").classList.contains("active-view")) {
     renderPractice();
   }
@@ -272,6 +321,45 @@ function renderBanks() {
 
 }
 
+function renderContinueCard() {
+  if (!els.continueCard) return;
+  const progress = state.practiceProgress;
+  const question = progress ? getQuestion(progress.questionIds?.[progress.index]) : null;
+  if (!progress || !question || !Array.isArray(progress.questionIds) || progress.questionIds.length === 0) {
+    els.continueCard.classList.add("hidden");
+    els.continueCard.innerHTML = "";
+    return;
+  }
+
+  const bank = getBankByQuestionId(question.id);
+  els.continueCard.classList.remove("hidden");
+  els.continueCard.innerHTML = `
+    <button class="continue-button" onclick="continueLastPractice()">
+      <span>
+        <strong>继续上次</strong>
+        <small>${escapeHTML(bank?.name || progress.title)}｜${progress.index + 1} / ${progress.questionIds.length} 题</small>
+      </span>
+      <span class="continue-arrow">›</span>
+    </button>
+  `;
+}
+
+function renderRecent() {
+  if (!els.recentList) return;
+  const recent = state.recentPractices || [];
+  if (recent.length === 0) {
+    els.recentList.innerHTML = `<article class="recent-row"><strong>暂无最近练习</strong><span>开始刷题后会自动记录进度。</span></article>`;
+    return;
+  }
+
+  els.recentList.innerHTML = recent.slice(0, 3).map((item) => `
+    <article class="recent-row">
+      <strong>${escapeHTML(item.title || "练习")}</strong>
+      <span>${item.index + 1}/${item.total} · ${escapeHTML(item.mode === "random" ? "随机" : "顺序")}</span>
+    </article>
+  `).join("");
+}
+
 function renderUnits() {
   const collection = getCurrentCollection();
   if (!collection) return;
@@ -285,6 +373,7 @@ function renderUnits() {
   units.forEach((bank) => {
     const summary = summarizeBank(bank);
     const unitNumber = String(units.indexOf(bank) + 1).padStart(2, "0");
+    const savedProgress = state.practiceProgress?.bankId === bank.id ? `上次做到：${state.practiceProgress.index + 1} / ${state.practiceProgress.questionIds.length}` : "";
     const row = document.createElement("article");
     row.className = "bank-row unit-row";
     row.innerHTML = `
@@ -293,8 +382,13 @@ function renderUnits() {
         <div>
           <h3>${escapeHTML(bank.name)}</h3>
           <p>${summary.total} 道题 · 已刷 ${summary.practiced} · 错题 <span class="danger-text">${summary.wrong}</span></p>
+          ${savedProgress ? `<p class="saved-progress">${savedProgress}</p>` : ""}
         </div>
         <button class="chevron-button" data-start="${bank.id}" onclick="startBankPractice(this.dataset.start, 'order')" aria-label="开始刷题">›</button>
+      </div>
+      <div class="unit-actions">
+        <button class="ghost-button" data-start="${bank.id}" onclick="startBankPractice(this.dataset.start, 'order')">顺序练习</button>
+        <button class="primary-button" data-random="${bank.id}" onclick="startBankPractice(this.dataset.random, 'random')">随机练习</button>
       </div>
     `;
     els.unitList.append(row);
@@ -318,12 +412,16 @@ function renderWrong() {
   const allWrongQuestions = getAllQuestions().filter((question) => getStats(question.id).isWrong);
   const wrongQuestions = allWrongQuestions.filter((question) => {
     const stats = getStats(question.id);
-    if (wrongFilter === "mastered") return stats.consecutiveCorrect >= 2;
-    if (wrongFilter === "unmastered") return stats.consecutiveCorrect < 2;
+    if (wrongFilter === "mastered" && !stats.isMastered) return false;
+    if (wrongFilter === "unmastered" && stats.isMastered) return false;
+    if (wrongBankFilter !== "all" && question.bankId !== wrongBankFilter) return false;
+    if (wrongTypeFilter !== "all" && question.type !== wrongTypeFilter) return false;
     return true;
   });
   els.wrongOverview.textContent = `共 ${allWrongQuestions.length} 题`;
   els.wrongList.innerHTML = "";
+  renderFilterOptions(els.wrongBankFilter, wrongBankFilter);
+  renderTypeFilterOptions(els.wrongTypeFilter, wrongTypeFilter);
   document.querySelectorAll("[data-wrong-filter]").forEach((button) => {
     button.classList.toggle("active", button.dataset.wrongFilter === wrongFilter);
   });
@@ -339,14 +437,66 @@ function renderWrong() {
     row.className = "question-row";
     row.innerHTML = `
       <div>
+        <p class="row-type">${getQuestionTypeLabel(question.type)}</p>
         <h3>${escapeHTML(question.question)}</h3>
-        <p>${escapeHTML(question.bankName)}</p>
+        <p>${escapeHTML(getQuestionSourceText(question))}</p>
       </div>
-      <p class="wrong-meta">答错 ${stats.wrongAttempts} 次</p>
+      <p class="wrong-meta">答错 ${stats.wrongAttempts} 次 · ${stats.lastAnsweredAt ? new Date(stats.lastAnsweredAt).toLocaleDateString() : "无日期"} · ${stats.isMastered ? "已掌握" : "未掌握"}</p>
       <button class="ghost-button" onclick="startQuestionPractice('${question.id}')">重新练习</button>
+      <button class="ghost-button" onclick="toggleWrongMastered('${question.id}')">${stats.isMastered ? "恢复未掌握" : "标记已掌握"}</button>
     `;
     els.wrongList.append(row);
   });
+}
+
+function renderFavorites() {
+  if (!els.favoriteList) return;
+  const allFavorites = getAllQuestions().filter((question) => getStats(question.id).isFavorite);
+  const questions = allFavorites.filter((question) => {
+    if (favoriteBankFilter !== "all" && question.bankId !== favoriteBankFilter) return false;
+    if (favoriteTypeFilter !== "all" && question.type !== favoriteTypeFilter) return false;
+    return true;
+  });
+  els.favoriteOverview.textContent = `${allFavorites.length} 道收藏题`;
+  renderFilterOptions(els.favoriteBankFilter, favoriteBankFilter);
+  renderTypeFilterOptions(els.favoriteTypeFilter, favoriteTypeFilter);
+  if (questions.length === 0) {
+    els.favoriteList.innerHTML = `<article class="question-row empty-row"><h3>暂无收藏</h3><p>点击刷题页右上角星号收藏题目。</p></article>`;
+    return;
+  }
+  els.favoriteList.innerHTML = "";
+  questions.forEach((question) => {
+    const row = document.createElement("article");
+    row.className = "question-row";
+    row.innerHTML = `
+      <div>
+        <p class="row-type">${getQuestionTypeLabel(question.type)}</p>
+        <h3>${escapeHTML(question.question)}</h3>
+        <p>${escapeHTML(getQuestionSourceText(question))}</p>
+      </div>
+      <button class="ghost-button" onclick="startQuestionPractice('${question.id}')">重新练习</button>
+      <button class="ghost-button" onclick="toggleFavoriteById('${question.id}')">取消收藏</button>
+    `;
+    els.favoriteList.append(row);
+  });
+}
+
+function renderFilterOptions(select, value) {
+  if (!select) return;
+  const banks = state.banks.map((bank) => ({ id: bank.id, name: bank.name }));
+  select.innerHTML = `<option value="all">全部单元</option>` + banks.map((bank) => `<option value="${bank.id}">${escapeHTML(bank.name)}</option>`).join("");
+  select.value = value;
+}
+
+function renderTypeFilterOptions(select, value) {
+  if (!select) return;
+  select.innerHTML = `
+    <option value="all">全部题型</option>
+    <option value="single">单选题</option>
+    <option value="multiple">多选题</option>
+    <option value="short">简答题</option>
+  `;
+  select.value = value;
 }
 
 function renderPractice() {
@@ -361,10 +511,15 @@ function renderPractice() {
   const correctAnswers = answerLetters(question.answer);
   const isMultipleChoice = question.type === "multiple";
   els.practiceSource.textContent = question.bankName || question.source || "题库";
+  els.questionTypeMeta.textContent = `${getQuestionTypeLabel(question.type)}｜${getQuestionSourceText(question)}`;
   els.questionStem.textContent = question.question;
   els.progressText.textContent = `${practiceSession.index + 1}/${practiceSession.questionIds.length}`;
   els.favoriteButton.textContent = stats.isFavorite ? "★" : "☆";
   els.optionList.innerHTML = "";
+  if (question.type === "short") {
+    renderShortQuestion(question, stats);
+    return;
+  }
 
   letters.forEach((letter) => {
     const button = document.createElement("button");
@@ -386,7 +541,7 @@ function renderPractice() {
   if (practiceSession.submitted) {
     const hasKnownAnswer = question.answer !== "UNKNOWN";
     const isCorrect = hasKnownAnswer && isAnswerCorrect(practiceSession.selected, question.answer);
-    els.answerPanel.classList.add("hidden");
+    els.answerPanel.classList.toggle("hidden", isCorrect && question.type !== "short");
     els.answerResult.textContent = hasKnownAnswer ? (isCorrect ? "回答正确" : "回答错误") : "已记录";
     els.answerResult.style.color = hasKnownAnswer ? (isCorrect ? "var(--good)" : "var(--bad)") : "var(--warn)";
     els.correctAnswer.textContent = hasKnownAnswer ? `正确答案：${question.answer}` : "正确答案：未识别";
@@ -395,12 +550,22 @@ function renderPractice() {
     els.submitButton.disabled = false;
     els.submitButton.classList.remove("hidden");
     els.removeWrongButton.classList.toggle("hidden", !(stats.isWrong && stats.consecutiveCorrect >= 2));
+    els.selectionHint.classList.add("hidden");
+    if (isMultipleChoice && isCorrect) {
+      scheduleAutoNext(question.id);
+    }
   } else {
     els.answerPanel.classList.add("hidden");
     els.submitButton.textContent = isMultipleChoice ? "确认并下一题" : "下一题";
     els.submitButton.disabled = false;
     els.submitButton.classList.remove("hidden");
     els.removeWrongButton.classList.add("hidden");
+    if (isMultipleChoice && selectedAnswers.length > 0) {
+      els.selectionHint.classList.remove("hidden");
+      els.selectionHint.textContent = `已选：${selectedAnswers.join("、")}｜点击空白处提交`;
+    } else {
+      els.selectionHint.classList.add("hidden");
+    }
   }
 
   document.querySelectorAll(".segmented").forEach((button) => {
@@ -408,11 +573,45 @@ function renderPractice() {
   });
 }
 
+function renderShortQuestion(question, stats) {
+  els.optionList.innerHTML = `
+    <article class="memory-card">
+      <button class="ghost-button" onclick="showShortAnswer()">点击查看答案</button>
+      <div id="shortAnswer" class="short-answer hidden">${escapeHTML(question.explanation || question.answer || "暂无参考答案")}</div>
+      <div class="memory-actions hidden" id="memoryActions">
+        <button class="ghost-button" onclick="setMemoryState('${question.id}', 'weak')">不熟悉</button>
+        <button class="ghost-button" onclick="setMemoryState('${question.id}', 'normal')">一般</button>
+        <button class="primary-button" onclick="setMemoryState('${question.id}', 'strong')">熟悉</button>
+      </div>
+    </article>
+  `;
+  els.selectionHint.classList.add("hidden");
+  els.answerPanel.classList.add("hidden");
+  els.submitButton.textContent = "下一题";
+  els.submitButton.disabled = false;
+  els.submitButton.classList.remove("hidden");
+}
+
+function showShortAnswer() {
+  document.querySelector("#shortAnswer")?.classList.remove("hidden");
+  document.querySelector("#memoryActions")?.classList.remove("hidden");
+}
+
+function setMemoryState(questionId, value) {
+  const stats = getStats(questionId);
+  stats.memoryState = value;
+  stats.attempts += 1;
+  stats.lastAnsweredAt = new Date().toISOString();
+  savePracticeProgress();
+  saveState();
+  nextQuestion();
+}
+
 function startBankPractice(bankId, mode) {
   const bank = state.banks.find((item) => item.id === bankId);
   if (!bank || bank.questions.length === 0) return;
   const questionIds = bank.questions.map((question) => question.id);
-  startPractice(bank.name, mode === "random" ? shuffle(questionIds) : questionIds, mode);
+  startPractice(bank.name, mode === "random" ? shuffle(questionIds) : questionIds, mode, { bankId, sessionType: "bank" });
 }
 
 function openCollection(collectionId) {
@@ -425,25 +624,62 @@ function startCollectionPractice(collectionId, mode) {
   const units = state.banks.filter((bank) => bank.collectionId === collectionId);
   const questionIds = units.flatMap((bank) => bank.questions.map((question) => question.id));
   if (questionIds.length === 0) return;
-  startPractice(collection?.name || "合集刷题", mode === "random" ? shuffle(questionIds) : questionIds, mode);
+  startPractice(collection?.name || "合集刷题", mode === "random" ? shuffle(questionIds) : questionIds, mode, { collectionId, sessionType: "collection" });
 }
 
 function startQuestionPractice(questionId) {
   const question = getQuestion(questionId);
   if (!question) return;
-  startPractice(question.bankName || "错题复刷", [questionId], "order");
+  startPractice(question.bankName || "错题复刷", [questionId], "order", { sessionType: "single-question" });
 }
 
-function startPractice(title, questionIds, mode) {
+function toggleWrongMastered(questionId) {
+  const stats = getStats(questionId);
+  stats.isMastered = !stats.isMastered;
+  saveState();
+  renderWrong();
+}
+
+function toggleFavoriteById(questionId) {
+  const stats = getStats(questionId);
+  stats.isFavorite = !stats.isFavorite;
+  saveState();
+  renderFavorites();
+  renderBanks();
+}
+
+function startPractice(title, questionIds, mode, meta = {}) {
   practiceSession = {
-    bankId: null,
-    collectionId: practiceSession.collectionId,
+    bankId: meta.bankId || null,
+    collectionId: meta.collectionId || practiceSession.collectionId,
     title,
+    sourceTitle: title,
     questionIds,
     index: 0,
     selected: null,
     submitted: false,
-    mode
+    mode,
+    sessionType: meta.sessionType || "bank"
+  };
+  savePracticeProgress();
+  showView("practice");
+  renderPractice();
+}
+
+function continueLastPractice() {
+  const progress = state.practiceProgress;
+  if (!progress || !Array.isArray(progress.questionIds) || progress.questionIds.length === 0) return;
+  practiceSession = {
+    bankId: progress.bankId || null,
+    collectionId: progress.collectionId || null,
+    title: progress.title || "继续练习",
+    sourceTitle: progress.sourceTitle || progress.title || "继续练习",
+    questionIds: progress.questionIds.filter((id) => getQuestion(id)),
+    index: Math.min(progress.index || 0, Math.max(progress.questionIds.length - 1, 0)),
+    selected: progress.selected || null,
+    submitted: Boolean(progress.submitted),
+    mode: progress.mode || "order",
+    sessionType: progress.sessionType || "bank"
   };
   showView("practice");
   renderPractice();
@@ -458,6 +694,7 @@ function chooseAnswer(letter, isMultipleChoice = false) {
       selected.add(letter);
     }
     practiceSession.selected = normalizeAnswerString([...selected].join(""));
+    savePracticeProgress();
     renderPractice();
     return;
   }
@@ -484,8 +721,10 @@ function recordCurrentAnswer() {
       stats.wrongAttempts += 1;
       stats.consecutiveCorrect = 0;
       stats.isWrong = true;
+      stats.isMastered = false;
     }
     practiceSession.submitted = true;
+    savePracticeProgress();
     saveState();
     render();
     return;
@@ -500,6 +739,7 @@ function nextQuestion() {
   }
   practiceSession.selected = null;
   practiceSession.submitted = false;
+  savePracticeProgress();
   renderPractice();
 }
 
@@ -511,6 +751,7 @@ function previousQuestion() {
   }
   practiceSession.selected = null;
   practiceSession.submitted = false;
+  savePracticeProgress();
   renderPractice();
 }
 
@@ -518,6 +759,7 @@ function submitOrNext() {
   const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
   if (question?.type === "multiple" && !practiceSession.submitted && practiceSession.selected) {
     recordCurrentAnswer();
+    return;
   }
   nextQuestion();
 }
@@ -539,6 +781,49 @@ function isAnswerCorrect(selected, correct) {
   const normalizedSelected = normalizeAnswerString(selected);
   const normalizedCorrect = normalizeAnswerString(correct);
   return Boolean(normalizedCorrect) && normalizedSelected === normalizedCorrect;
+}
+
+function scheduleAutoNext(questionId) {
+  window.clearTimeout(scheduleAutoNext.timer);
+  scheduleAutoNext.timer = window.setTimeout(() => {
+    const current = getQuestion(practiceSession.questionIds[practiceSession.index]);
+    if (current?.id === questionId && practiceSession.submitted && isAnswerCorrect(practiceSession.selected, current.answer)) {
+      nextQuestion();
+    }
+  }, 650);
+}
+
+function savePracticeProgress() {
+  if (!practiceSession.questionIds.length) return;
+  state.practiceProgress = {
+    bankId: practiceSession.bankId,
+    collectionId: practiceSession.collectionId,
+    title: practiceSession.title,
+    sourceTitle: practiceSession.sourceTitle,
+    questionIds: practiceSession.questionIds,
+    index: practiceSession.index,
+    selected: practiceSession.selected,
+    submitted: practiceSession.submitted,
+    mode: practiceSession.mode,
+    sessionType: practiceSession.sessionType,
+    updatedAt: new Date().toISOString()
+  };
+  rememberRecentPractice();
+  saveState();
+}
+
+function rememberRecentPractice() {
+  const item = {
+    title: practiceSession.title,
+    bankId: practiceSession.bankId,
+    collectionId: practiceSession.collectionId,
+    index: practiceSession.index,
+    total: practiceSession.questionIds.length,
+    mode: practiceSession.mode,
+    updatedAt: new Date().toISOString()
+  };
+  const existing = (state.recentPractices || []).filter((recent) => recent.title !== item.title);
+  state.recentPractices = [item, ...existing].slice(0, 6);
 }
 
 async function handleFile(file) {
@@ -1338,6 +1623,16 @@ els.fileInput.addEventListener("change", () => {
 });
 els.backToBanks.addEventListener("click", () => showView("banks"));
 els.backToCollections.addEventListener("click", () => showView("banks"));
+els.quickRandom.addEventListener("click", () => {
+  const collection = state.collections?.[0];
+  if (collection) startCollectionPractice(collection.id, "random");
+});
+els.quickUnits.addEventListener("click", () => {
+  const collection = state.collections?.[0];
+  if (collection) openCollection(collection.id);
+});
+els.quickWrong.addEventListener("click", () => showView("wrong"));
+els.quickFavorite.addEventListener("click", () => showView("favorite"));
 els.startCollectionRandom.addEventListener("click", () => {
   const collection = getCurrentCollection();
   if (collection) {
@@ -1347,8 +1642,15 @@ els.startCollectionRandom.addEventListener("click", () => {
 els.submitButton.addEventListener("click", submitOrNext);
 els.previousButton.addEventListener("click", previousQuestion);
 els.practiceLayout.addEventListener("click", (event) => {
-  if (!practiceSession.submitted) return;
   if (event.target.closest("#submitButton, #previousButton, #favoriteButton, #removeWrongButton, #backToBanks, .segmented")) return;
+  const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
+  if (!question) return;
+  if (!practiceSession.submitted && question.type === "multiple") {
+    if (!practiceSession.selected) return;
+    recordCurrentAnswer();
+    return;
+  }
+  if (!practiceSession.submitted) return;
   nextQuestion();
 });
 document.querySelectorAll("[data-wrong-filter]").forEach((button) => {
@@ -1357,12 +1659,29 @@ document.querySelectorAll("[data-wrong-filter]").forEach((button) => {
     renderWrong();
   });
 });
+els.wrongBankFilter.addEventListener("change", () => {
+  wrongBankFilter = els.wrongBankFilter.value;
+  renderWrong();
+});
+els.wrongTypeFilter.addEventListener("change", () => {
+  wrongTypeFilter = els.wrongTypeFilter.value;
+  renderWrong();
+});
+els.favoriteBankFilter.addEventListener("change", () => {
+  favoriteBankFilter = els.favoriteBankFilter.value;
+  renderFavorites();
+});
+els.favoriteTypeFilter.addEventListener("change", () => {
+  favoriteTypeFilter = els.favoriteTypeFilter.value;
+  renderFavorites();
+});
 els.favoriteButton.addEventListener("click", () => {
   const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
   if (!question) return;
   const stats = getStats(question.id);
   stats.isFavorite = !stats.isFavorite;
   saveState();
+  renderFavorites();
   renderPractice();
 });
 els.removeWrongButton.addEventListener("click", () => {
@@ -1381,7 +1700,7 @@ els.resetProgressButton.addEventListener("click", () => {
 });
 els.clearAllButton.addEventListener("click", () => {
   if (!confirm("清空所有题库和答题记录？")) return;
-  state = { banks: [], collections: [], stats: {} };
+  state = defaultState();
   saveState();
   render();
   ensureBuiltinModernHistory();
