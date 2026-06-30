@@ -139,6 +139,7 @@ const els = {
   wrongBankFilter: document.querySelector("#wrongBankFilter"),
   wrongTypeFilter: document.querySelector("#wrongTypeFilter"),
   removeWrongButton: document.querySelector("#removeWrongButton"),
+  practiceView: document.querySelector("#practiceView"),
   backToBanks: document.querySelector("#backToBanks"),
   toast: document.querySelector("#toast"),
   exportButton: document.querySelector("#exportButton"),
@@ -767,6 +768,38 @@ function submitOrNext() {
   const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
   if (question?.type === "multiple" && !practiceSession.submitted && practiceSession.selected) {
     recordCurrentAnswer();
+    return;
+  }
+  nextQuestion();
+}
+
+function handlePracticeBlankTap(event) {
+  if (!document.body.classList.contains("is-practice-view")) return;
+  if (event.target.closest("button, .option-button, input, select, textarea, a")) return;
+
+  const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
+  if (!question) return;
+
+  if (practiceSession.submitted) {
+    advanceFromBlankTap();
+    return;
+  }
+
+  if (!practiceSession.selected) return;
+
+  if (question.type === "multiple") {
+    recordCurrentAnswer();
+    return;
+  }
+
+  if (question.type === "single" || question.type === "judge") {
+    advanceFromBlankTap();
+  }
+}
+
+function advanceFromBlankTap() {
+  if (practiceSession.index >= practiceSession.questionIds.length - 1) {
+    showToast("已完成本轮练习。");
     return;
   }
   nextQuestion();
@@ -1650,18 +1683,7 @@ els.startCollectionRandom.addEventListener("click", () => {
 });
 els.submitButton.addEventListener("click", submitOrNext);
 els.previousButton.addEventListener("click", previousQuestion);
-els.practiceLayout.addEventListener("click", (event) => {
-  if (event.target.closest("#submitButton, #previousButton, #favoriteButton, #removeWrongButton, #backToBanks, .segmented")) return;
-  const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
-  if (!question) return;
-  if (!practiceSession.submitted && question.type === "multiple") {
-    if (!practiceSession.selected) return;
-    recordCurrentAnswer();
-    return;
-  }
-  if (!practiceSession.submitted) return;
-  nextQuestion();
-});
+document.addEventListener("click", handlePracticeBlankTap);
 document.querySelectorAll("[data-wrong-filter]").forEach((button) => {
   button.addEventListener("click", () => {
     wrongFilter = button.dataset.wrongFilter;
