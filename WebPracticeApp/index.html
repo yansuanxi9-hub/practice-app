@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>刷题</title>
-  <link rel="stylesheet" href="./styles.css?v=20260630-blanktap">
+  <link rel="stylesheet" href="./styles.css?v=20260630-wrong-review">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -26,6 +26,7 @@
           <button class="quick-action" id="quickUnits">单元刷题</button>
           <button class="quick-action" id="quickWrong">错题本</button>
           <button class="quick-action" id="quickFavorite">收藏夹</button>
+          <button class="quick-action" id="quickAudit">答案待校对</button>
         </div>
 
         <div class="list-heading compact-heading">
@@ -80,6 +81,7 @@
             <h3 id="answerResult"></h3>
             <p id="correctAnswer"></p>
             <p id="explanation"></p>
+            <button id="editAnswerButton" class="ghost-button">修改答案</button>
             <button id="removeWrongButton" class="ghost-button hidden">从错题本移除</button>
           </section>
 
@@ -102,10 +104,15 @@
           <button class="filter-tab" data-wrong-filter="unmastered">未掌握</button>
           <button class="filter-tab" data-wrong-filter="mastered">已掌握</button>
         </div>
-        <div class="filter-row">
+        <div class="filter-row wrong-filter-row">
+          <select id="wrongSubjectFilter" class="filter-select" aria-label="错题科目筛选"></select>
           <select id="wrongBankFilter" class="filter-select" aria-label="错题科目筛选"></select>
           <select id="wrongTypeFilter" class="filter-select" aria-label="错题题型筛选"></select>
         </div>
+        <button id="startWrongReviewButton" class="review-start-button" type="button">
+          <strong>开始复刷当前错题</strong>
+          <span id="wrongReviewSummary">当前条件下暂无错题</span>
+        </button>
         <div id="wrongList" class="question-list"></div>
       </section>
 
@@ -121,6 +128,17 @@
           <select id="favoriteTypeFilter" class="filter-select" aria-label="收藏题型筛选"></select>
         </div>
         <div id="favoriteList" class="question-list"></div>
+      </section>
+
+      <section id="auditView" class="view">
+        <div class="page-heading">
+          <div>
+            <h2>答案待校对</h2>
+            <p id="auditOverview">0 道题</p>
+          </div>
+        </div>
+        <div id="answerReport" class="answer-report"></div>
+        <div id="auditList" class="question-list"></div>
       </section>
 
       <section id="settingsView" class="view">
@@ -147,10 +165,22 @@
 
   <div id="toast" class="toast hidden" role="status"></div>
 
+  <dialog id="answerEditorDialog">
+    <form method="dialog" class="answer-editor">
+      <h2>修改答案</h2>
+      <p id="answerEditorQuestion"></p>
+      <div id="answerEditorOptions" class="answer-editor-options"></div>
+      <div class="answer-editor-actions">
+        <button id="cancelAnswerEdit" class="ghost-button" value="cancel" type="button">取消</button>
+        <button id="saveAnswerEdit" class="primary-button" value="default" type="button">保存</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="./vendor/jszip.min.js"></script>
   <script src="./vendor/jszip-global.js"></script>
   <script src="./vendor/pdf.min.js"></script>
   <script src="./vendor/pdf-global.js"></script>
-  <script src="./app.js?v=20260630-blanktap"></script>
+  <script src="./app.js?v=20260630-wrong-review"></script>
 </body>
 </html>

@@ -1,5 +1,5 @@
 const STORAGE_KEY = "local-practice-web-v1";
-const BUILTIN_DATA_VERSION = "20260630-answer-progress";
+const BUILTIN_DATA_VERSION = "20260630-answer-audit";
 const BUILTIN_COLLECTION_ID = "collection-modern-history-2026";
 const BUILTIN_DATA_URL = `./data/modern-history-2026.json?v=${BUILTIN_DATA_VERSION}`;
 const letters = ["A", "B", "C", "D"];
@@ -98,6 +98,7 @@ let practiceSession = {
 };
 let favoriteBankFilter = "all";
 let favoriteTypeFilter = "all";
+let wrongSubjectFilter = "all";
 let wrongBankFilter = "all";
 let wrongTypeFilter = "all";
 
@@ -109,6 +110,7 @@ const els = {
   quickUnits: document.querySelector("#quickUnits"),
   quickWrong: document.querySelector("#quickWrong"),
   quickFavorite: document.querySelector("#quickFavorite"),
+  quickAudit: document.querySelector("#quickAudit"),
   recentList: document.querySelector("#recentList"),
   bankList: document.querySelector("#bankList"),
   unitList: document.querySelector("#unitList"),
@@ -118,6 +120,8 @@ const els = {
   startCollectionRandom: document.querySelector("#startCollectionRandom"),
   wrongOverview: document.querySelector("#wrongOverview"),
   wrongList: document.querySelector("#wrongList"),
+  startWrongReviewButton: document.querySelector("#startWrongReviewButton"),
+  wrongReviewSummary: document.querySelector("#wrongReviewSummary"),
   submitButton: document.querySelector("#submitButton"),
   previousButton: document.querySelector("#previousButton"),
   optionList: document.querySelector("#optionList"),
@@ -131,11 +135,13 @@ const els = {
   answerResult: document.querySelector("#answerResult"),
   correctAnswer: document.querySelector("#correctAnswer"),
   explanation: document.querySelector("#explanation"),
+  editAnswerButton: document.querySelector("#editAnswerButton"),
   favoriteButton: document.querySelector("#favoriteButton"),
   favoriteOverview: document.querySelector("#favoriteOverview"),
   favoriteList: document.querySelector("#favoriteList"),
   favoriteBankFilter: document.querySelector("#favoriteBankFilter"),
   favoriteTypeFilter: document.querySelector("#favoriteTypeFilter"),
+  wrongSubjectFilter: document.querySelector("#wrongSubjectFilter"),
   wrongBankFilter: document.querySelector("#wrongBankFilter"),
   wrongTypeFilter: document.querySelector("#wrongTypeFilter"),
   removeWrongButton: document.querySelector("#removeWrongButton"),
@@ -144,7 +150,15 @@ const els = {
   toast: document.querySelector("#toast"),
   exportButton: document.querySelector("#exportButton"),
   resetProgressButton: document.querySelector("#resetProgressButton"),
-  clearAllButton: document.querySelector("#clearAllButton")
+  clearAllButton: document.querySelector("#clearAllButton"),
+  auditOverview: document.querySelector("#auditOverview"),
+  auditList: document.querySelector("#auditList"),
+  answerReport: document.querySelector("#answerReport"),
+  answerEditorDialog: document.querySelector("#answerEditorDialog"),
+  answerEditorQuestion: document.querySelector("#answerEditorQuestion"),
+  answerEditorOptions: document.querySelector("#answerEditorOptions"),
+  saveAnswerEdit: document.querySelector("#saveAnswerEdit"),
+  cancelAnswerEdit: document.querySelector("#cancelAnswerEdit")
 };
 
 function loadState() {
@@ -159,6 +173,8 @@ function loadState() {
       banks: Array.isArray(parsed.banks) ? parsed.banks : structuredClone(sampleBanks),
       collections: Array.isArray(parsed.collections) ? parsed.collections : [],
       stats: parsed.stats && typeof parsed.stats === "object" ? parsed.stats : {},
+      answerOverrides: parsed.answerOverrides && typeof parsed.answerOverrides === "object" ? parsed.answerOverrides : {},
+      questionDataReport: parsed.questionDataReport || null,
       practiceProgress: parsed.practiceProgress || null,
       recentPractices: Array.isArray(parsed.recentPractices) ? parsed.recentPractices : [],
       builtinDataVersion: parsed.builtinDataVersion || ""
@@ -169,11 +185,18 @@ function loadState() {
 }
 
 function defaultState() {
-  return { banks: [], collections: [], stats: {}, practiceProgress: null, recentPractices: [], builtinDataVersion: "" };
+  return { banks: [], collections: [], stats: {}, answerOverrides: {}, questionDataReport: null, practiceProgress: null, recentPractices: [], builtinDataVersion: "" };
 }
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function migrateLoadedState() {
+  state.answerOverrides = state.answerOverrides || {};
+  state.questionDataReport = state.questionDataReport || null;
+  normalizeAllQuestionAnswerMetadata(state.banks || []);
+  applyBuiltInManualCorrections();
 }
 
 async function ensureBuiltinModernHistory() {
@@ -194,7 +217,11 @@ async function ensureBuiltinModernHistory() {
       ...state.banks.filter((bank) => bank.collectionId !== BUILTIN_COLLECTION_ID && !String(bank.id).startsWith("modern-history-unit-")),
       ...data.banks
     ];
+    normalizeAllQuestionAnswerMetadata(state.banks);
+    applyBuiltInManualCorrections();
     state.stats = {};
+    state.answerOverrides = state.answerOverrides || {};
+    state.questionDataReport = buildQuestionDataErrorReport();
     state.builtinDataVersion = BUILTIN_DATA_VERSION;
     saveState();
     render();
@@ -229,6 +256,28 @@ function getQuestionSourceText(question) {
   return `${bank?.collectionId ? "近代史纲要" : "题库"}｜${bank?.name || question.source || "未命名单元"}`;
 }
 
+function getCompactQuestionSourceText(question) {
+  const bank = getBankByQuestionId(question.id);
+  const subject = getQuestionSubjectLabel(question);
+  return `${subject}｜${getShortChapterLabel(question) || bank?.name || question.source || "未命名单元"}`;
+}
+
+function getQuestionSubjectId(question) {
+  const bank = getBankByQuestionId(question.id);
+  if (!bank) return "unknown";
+  return bank.collectionId || bank.id;
+}
+
+function getQuestionSubjectLabel(question) {
+  const bank = getBankByQuestionId(question.id);
+  if (!bank) return "题库";
+  const collection = (state.collections || []).find((item) => item.id === bank.collectionId);
+  if (collection) {
+    return collection.name.includes("近现代史纲要") ? "近代史纲要" : collection.name;
+  }
+  return bank.name || "题库";
+}
+
 function getShortChapterLabel(question) {
   const bank = getBankByQuestionId(question.id);
   const source = bank?.name || question.source || "题库";
@@ -246,11 +295,132 @@ function getStats(questionId) {
       isWrong: false,
       isFavorite: false,
       isMastered: false,
+      correctInReviewCount: 0,
       memoryState: "",
-      lastAnsweredAt: null
+      lastAnsweredAt: null,
+      lastWrongAt: null
     };
   }
   return state.stats[questionId];
+}
+
+function normalizeAllQuestionAnswerMetadata(banks = state.banks) {
+  banks.forEach((bank) => {
+    bank.questions.forEach((question) => normalizeQuestionAnswerMetadata(question));
+  });
+}
+
+function normalizeQuestionAnswerMetadata(question) {
+  const normalized = normalizeAnswerForType(question.answer, question.type);
+  question.importedAnswer = normalizeAnswerForType(question.importedAnswer || normalized, question.type);
+  if (!normalized || question.answer === "UNKNOWN") {
+    question.answer = "";
+    question.answerSource = question.answerSource || "unknown";
+    question.answerConfidence = question.answerConfidence || "low";
+    return question;
+  }
+
+  question.answer = normalized;
+  question.answerSource = question.answerSource || "imported";
+  question.answerConfidence = question.answerConfidence || "low";
+  return question;
+}
+
+function getAnswerOverride(questionId) {
+  return (state.answerOverrides || {})[questionId] || null;
+}
+
+function getEffectiveAnswer(question) {
+  const override = getAnswerOverride(question.id);
+  if (override?.answer) {
+    return {
+      answer: normalizeAnswerForType(override.answer, question.type),
+      source: "manual",
+      confidence: "high"
+    };
+  }
+
+  const answer = normalizeAnswerForType(question.answer, question.type);
+  if (answer) {
+    return {
+      answer,
+      source: question.answerSource || "imported",
+      confidence: question.answerConfidence || "low"
+    };
+  }
+
+  const importedAnswer = normalizeAnswerForType(question.importedAnswer, question.type);
+  if (importedAnswer) {
+    return {
+      answer: importedAnswer,
+      source: "imported",
+      confidence: question.answerConfidence || "low"
+    };
+  }
+
+  return { answer: "", source: "unknown", confidence: "low" };
+}
+
+function hasReliableAnswer(question) {
+  const answer = getEffectiveAnswer(question);
+  return Boolean(answer.answer) && answer.confidence !== "low";
+}
+
+function buildQuestionDataErrorReport() {
+  const items = [];
+  getAllQuestions().forEach((question) => {
+    const issue = getQuestionAnswerIssue(question);
+    if (issue) {
+      items.push({
+        id: question.id,
+        question: question.question,
+        type: question.type,
+        answer: getEffectiveAnswer(question).answer,
+        source: question.bankName || question.source,
+        reason: issue
+      });
+    }
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    summary: {
+      unknownAnswerCount: items.filter((item) => item.reason.includes("未识别")).length,
+      lowConfidenceCount: items.filter((item) => item.reason.includes("低置信度")).length,
+      multipleAnswerIssueCount: items.filter((item) => item.reason.includes("多选")).length,
+      typeMismatchCount: items.filter((item) => item.reason.includes("题型")).length
+    },
+    items
+  };
+}
+
+function getQuestionAnswerIssue(question) {
+  const effective = getEffectiveAnswer(question);
+  const answer = effective.answer;
+  if (effective.source === "manual" && effective.confidence === "high") return "";
+  if (!answer) return "答案未识别";
+  if (effective.confidence === "low") return "低置信度答案，需人工核对";
+  if (question.type === "single" && answer.length !== 1) return "题型与答案不匹配";
+  if (question.type === "multiple" && !/^[A-D]{2,4}$/.test(answer)) return "多选题答案异常";
+  if (/疑似|未识别|异常/.test(question.explanation || "")) return "解析提示异常";
+  return "";
+}
+
+function applyBuiltInManualCorrections() {
+  state.answerOverrides = state.answerOverrides || {};
+  const correction = {
+    answer: "AB",
+    answerSource: "manual",
+    answerConfidence: "high",
+    updatedAt: new Date().toISOString()
+  };
+  state.answerOverrides["modern-history-unit-1-multiple-44"] = correction;
+  const question = getQuestion("modern-history-unit-1-multiple-44");
+  if (question) {
+    question.answer = correction.answer;
+    question.answerSource = correction.answerSource;
+    question.answerConfidence = correction.answerConfidence;
+  }
 }
 
 function render() {
@@ -260,6 +430,7 @@ function render() {
   renderUnits();
   renderWrong();
   renderFavorites();
+  renderAudit();
   if (document.querySelector("#practiceView").classList.contains("active-view")) {
     renderPractice();
   }
@@ -419,21 +590,16 @@ function getCurrentCollection() {
 
 function renderWrong() {
   const allWrongQuestions = getAllQuestions().filter((question) => getStats(question.id).isWrong);
-  const wrongQuestions = allWrongQuestions.filter((question) => {
-    const stats = getStats(question.id);
-    if (wrongFilter === "mastered" && !stats.isMastered) return false;
-    if (wrongFilter === "unmastered" && stats.isMastered) return false;
-    if (wrongBankFilter !== "all" && question.bankId !== wrongBankFilter) return false;
-    if (wrongTypeFilter !== "all" && question.type !== wrongTypeFilter) return false;
-    return true;
-  });
+  const wrongQuestions = getFilteredWrongQuestions();
   els.wrongOverview.textContent = `共 ${allWrongQuestions.length} 题`;
   els.wrongList.innerHTML = "";
-  renderFilterOptions(els.wrongBankFilter, wrongBankFilter);
+  renderSubjectFilterOptions(els.wrongSubjectFilter, wrongSubjectFilter);
+  renderWrongBankFilterOptions();
   renderTypeFilterOptions(els.wrongTypeFilter, wrongTypeFilter);
   document.querySelectorAll("[data-wrong-filter]").forEach((button) => {
     button.classList.toggle("active", button.dataset.wrongFilter === wrongFilter);
   });
+  updateWrongReviewAction(wrongQuestions);
 
   if (wrongQuestions.length === 0) {
     els.wrongList.innerHTML = `<article class="question-row empty-row"><h3>暂无错题</h3><p>答错的题会自动出现在这里。</p></article>`;
@@ -443,19 +609,50 @@ function renderWrong() {
   wrongQuestions.forEach((question) => {
     const stats = getStats(question.id);
     const row = document.createElement("article");
-    row.className = "question-row";
+    row.className = "question-row wrong-question-row";
     row.innerHTML = `
       <div>
         <p class="row-type">${getQuestionTypeLabel(question.type)}</p>
         <h3>${escapeHTML(question.question)}</h3>
-        <p>${escapeHTML(getQuestionSourceText(question))}</p>
+        <p>${escapeHTML(getCompactQuestionSourceText(question))}</p>
+        <p class="wrong-meta">答错 ${stats.wrongAttempts} 次｜${stats.lastWrongAt || stats.lastAnsweredAt ? new Date(stats.lastWrongAt || stats.lastAnsweredAt).toLocaleDateString() : "无日期"}｜${stats.isMastered ? "已掌握" : "未掌握"}</p>
       </div>
-      <p class="wrong-meta">答错 ${stats.wrongAttempts} 次 · ${stats.lastAnsweredAt ? new Date(stats.lastAnsweredAt).toLocaleDateString() : "无日期"} · ${stats.isMastered ? "已掌握" : "未掌握"}</p>
-      <button class="ghost-button" onclick="startQuestionPractice('${question.id}')">重新练习</button>
-      <button class="ghost-button" onclick="toggleWrongMastered('${question.id}')">${stats.isMastered ? "恢复未掌握" : "标记已掌握"}</button>
+      <div class="question-row-actions">
+        <button class="text-button" onclick="startQuestionPractice('${question.id}')">查看</button>
+        <button class="text-button" onclick="toggleWrongMastered('${question.id}')">${stats.isMastered ? "恢复未掌握" : "标记已掌握"}</button>
+      </div>
     `;
     els.wrongList.append(row);
   });
+}
+
+function getFilteredWrongQuestions() {
+  return getAllQuestions().filter((question) => {
+    const stats = getStats(question.id);
+    if (!stats.isWrong) return false;
+    if (wrongFilter === "mastered" && !stats.isMastered) return false;
+    if (wrongFilter === "unmastered" && stats.isMastered) return false;
+    if (wrongSubjectFilter !== "all" && getQuestionSubjectId(question) !== wrongSubjectFilter) return false;
+    if (wrongBankFilter !== "all" && question.bankId !== wrongBankFilter) return false;
+    if (wrongTypeFilter !== "all" && question.type !== wrongTypeFilter) return false;
+    return true;
+  });
+}
+
+function updateWrongReviewAction(wrongQuestions = getFilteredWrongQuestions()) {
+  if (!els.startWrongReviewButton) return;
+  const count = wrongQuestions.length;
+  const label = getWrongReviewLabel();
+  els.startWrongReviewButton.disabled = count === 0;
+  els.startWrongReviewButton.querySelector("strong").textContent = count ? label : "当前条件下暂无错题";
+  els.wrongReviewSummary.textContent = count ? `共 ${count} 题` : "调整筛选条件后可开始复刷";
+}
+
+function getWrongReviewLabel() {
+  if (wrongSubjectFilter === "all" && wrongBankFilter === "all" && wrongTypeFilter === "all" && wrongFilter === "all") {
+    return "开始复刷全部错题";
+  }
+  return "开始复刷当前筛选";
 }
 
 function renderFavorites() {
@@ -490,11 +687,77 @@ function renderFavorites() {
   });
 }
 
+function renderAudit() {
+  if (!els.auditList) return;
+  const report = buildQuestionDataErrorReport();
+  state.questionDataReport = report;
+  els.auditOverview.textContent = `${report.items.length} 道题需核对`;
+  els.answerReport.innerHTML = `
+    <strong>question-data-error-report</strong>
+    <span>未识别答案：${report.summary.unknownAnswerCount}</span>
+    <span>低置信度答案：${report.summary.lowConfidenceCount}</span>
+    <span>多选答案异常：${report.summary.multipleAnswerIssueCount}</span>
+    <span>题型与答案不匹配：${report.summary.typeMismatchCount}</span>
+  `;
+
+  if (report.items.length === 0) {
+    els.auditList.innerHTML = `<article class="question-row empty-row"><h3>暂无待校对答案</h3><p>已手动确认的答案会从这里移除。</p></article>`;
+    return;
+  }
+
+  els.auditList.innerHTML = "";
+  report.items.forEach((item) => {
+    const question = getQuestion(item.id);
+    if (!question) return;
+    const effective = getEffectiveAnswer(question);
+    const row = document.createElement("article");
+    row.className = "question-row";
+    row.innerHTML = `
+      <div>
+        <p class="row-type">${getQuestionTypeLabel(question.type)}</p>
+        <h3>${escapeHTML(question.question)}</h3>
+        <p>${escapeHTML(getQuestionSourceText(question))}</p>
+        <p>当前答案：${escapeHTML(effective.answer || "未识别")} · ${escapeHTML(item.reason)}</p>
+      </div>
+      <button class="ghost-button" onclick="startQuestionPractice('${question.id}')">查看题目</button>
+      <button class="primary-button" onclick="openAnswerEditor('${question.id}')">修改答案</button>
+    `;
+    els.auditList.append(row);
+  });
+}
+
 function renderFilterOptions(select, value) {
   if (!select) return;
   const banks = state.banks.map((bank) => ({ id: bank.id, name: bank.name }));
   select.innerHTML = `<option value="all">全部单元</option>` + banks.map((bank) => `<option value="${bank.id}">${escapeHTML(bank.name)}</option>`).join("");
   select.value = value;
+}
+
+function renderWrongBankFilterOptions() {
+  if (!els.wrongBankFilter) return;
+  const banks = state.banks
+    .filter((bank) => wrongSubjectFilter === "all" || (bank.collectionId || bank.id) === wrongSubjectFilter)
+    .map((bank) => ({ id: bank.id, name: bank.name }));
+  els.wrongBankFilter.innerHTML = `<option value="all">全部单元</option>` + banks.map((bank) => `<option value="${bank.id}">${escapeHTML(bank.name)}</option>`).join("");
+  const hasSelected = banks.some((bank) => bank.id === wrongBankFilter);
+  els.wrongBankFilter.value = hasSelected ? wrongBankFilter : "all";
+  if (!hasSelected) wrongBankFilter = "all";
+}
+
+function renderSubjectFilterOptions(select, value) {
+  if (!select) return;
+  const subjects = new Map();
+  (state.collections || []).forEach((collection) => {
+    subjects.set(collection.id, collection.name.includes("近现代史纲要") ? "近代史纲要" : collection.name);
+  });
+  state.banks.filter((bank) => !bank.collectionId).forEach((bank) => {
+    subjects.set(bank.id, bank.name);
+  });
+  select.innerHTML = `<option value="all">全部科目</option>` + [...subjects.entries()]
+    .map(([id, name]) => `<option value="${id}">${escapeHTML(name)}</option>`)
+    .join("");
+  select.value = subjects.has(value) ? value : "all";
+  if (select.value !== value) wrongSubjectFilter = "all";
 }
 
 function renderTypeFilterOptions(select, value) {
@@ -517,7 +780,8 @@ function renderPractice() {
 
   const stats = getStats(question.id);
   const selectedAnswers = selectedAnswerLetters();
-  const correctAnswers = answerLetters(question.answer);
+  const effectiveAnswer = getEffectiveAnswer(question);
+  const correctAnswers = answerLetters(effectiveAnswer.answer);
   const isMultipleChoice = question.type === "multiple";
   els.practiceSource.textContent = "";
   els.questionTypeMeta.textContent = `${getShortChapterLabel(question)} · ${getQuestionTypeLabel(question.type)}`;
@@ -534,8 +798,8 @@ function renderPractice() {
     const button = document.createElement("button");
     button.className = "option-button";
     if (selectedAnswers.includes(letter)) button.classList.add("selected");
-    if (practiceSession.submitted && question.answer !== "UNKNOWN" && correctAnswers.includes(letter)) button.classList.add("correct");
-    if (practiceSession.submitted && question.answer !== "UNKNOWN" && selectedAnswers.includes(letter) && !correctAnswers.includes(letter)) button.classList.add("wrong");
+    if (practiceSession.submitted && hasReliableAnswer(question) && correctAnswers.includes(letter)) button.classList.add("correct");
+    if (practiceSession.submitted && hasReliableAnswer(question) && selectedAnswers.includes(letter) && !correctAnswers.includes(letter)) button.classList.add("wrong");
     button.disabled = practiceSession.submitted;
     button.innerHTML = `<span class="option-letter">${letter}</span><span>${escapeHTML(question.options[letter])}</span>`;
     button.addEventListener("click", (event) => {
@@ -548,19 +812,21 @@ function renderPractice() {
   });
 
   if (practiceSession.submitted) {
-    const hasKnownAnswer = question.answer !== "UNKNOWN";
-    const isCorrect = hasKnownAnswer && isAnswerCorrect(practiceSession.selected, question.answer);
-    els.answerPanel.classList.toggle("hidden", isCorrect && question.type !== "short");
-    els.answerResult.textContent = hasKnownAnswer ? (isCorrect ? "回答正确" : "回答错误") : "已记录";
-    els.answerResult.style.color = hasKnownAnswer ? (isCorrect ? "var(--good)" : "var(--bad)") : "var(--warn)";
-    els.correctAnswer.textContent = hasKnownAnswer ? `正确答案：${question.answer}` : "正确答案：未识别";
-    els.explanation.textContent = question.explanation || "暂无解析";
-    els.submitButton.textContent = practiceSession.index === practiceSession.questionIds.length - 1 ? "重新开始" : "下一题";
+    const reliable = hasReliableAnswer(question);
+    const isCorrect = reliable && isAnswerCorrect(practiceSession.selected, effectiveAnswer.answer);
+    els.answerPanel.classList.toggle("hidden", reliable && isCorrect && question.type !== "short");
+    els.answerResult.textContent = reliable ? (isCorrect ? "回答正确" : "回答错误") : "答案待校对";
+    els.answerResult.style.color = reliable ? (isCorrect ? "var(--good)" : "var(--bad)") : "var(--warn)";
+    els.correctAnswer.textContent = reliable ? `正确答案：${effectiveAnswer.answer}` : "当前题未识别到可靠答案，请先人工核对。";
+    els.explanation.textContent = reliable ? (question.explanation || "暂无解析") : "答案未识别或置信度较低，本次作答只记录，不判错。";
+    els.submitButton.textContent = practiceSession.index === practiceSession.questionIds.length - 1
+      ? (practiceSession.sessionType === "wrong-review" ? "完成复刷" : "重新开始")
+      : "下一题";
     els.submitButton.disabled = false;
     els.submitButton.classList.remove("hidden");
     els.removeWrongButton.classList.toggle("hidden", !(stats.isWrong && stats.consecutiveCorrect >= 2));
     els.selectionHint.classList.add("hidden");
-    if (isMultipleChoice && isCorrect) {
+    if (isMultipleChoice && reliable && isCorrect) {
       scheduleAutoNext(question.id);
     }
   } else {
@@ -642,6 +908,29 @@ function startQuestionPractice(questionId) {
   startPractice(question.bankName || "错题复刷", [questionId], "order", { sessionType: "single-question" });
 }
 
+function startWrongReview() {
+  const questions = getFilteredWrongQuestions();
+  if (questions.length === 0) {
+    showToast("当前条件下暂无错题。");
+    return;
+  }
+  const title = buildWrongReviewTitle(questions);
+  startPractice(title, questions.map((question) => question.id), "order", {
+    sessionType: "wrong-review",
+    reviewResults: {}
+  });
+}
+
+function buildWrongReviewTitle(questions) {
+  if (wrongBankFilter !== "all") {
+    const bank = state.banks.find((item) => item.id === wrongBankFilter);
+    return `错题复刷 · ${bank ? getShortChapterLabel({ id: bank.questions[0]?.id, source: bank.name }) : "当前单元"}`;
+  }
+  if (wrongTypeFilter !== "all") return `错题复刷 · ${getQuestionTypeLabel(wrongTypeFilter)}`;
+  if (wrongSubjectFilter !== "all") return `错题复刷 · ${getQuestionSubjectLabel(questions[0])}`;
+  return "错题复刷";
+}
+
 function toggleWrongMastered(questionId) {
   const stats = getStats(questionId);
   stats.isMastered = !stats.isMastered;
@@ -657,6 +946,69 @@ function toggleFavoriteById(questionId) {
   renderBanks();
 }
 
+function openAnswerEditor(questionId) {
+  const question = getQuestion(questionId);
+  if (!question || !els.answerEditorDialog) return;
+  els.answerEditorDialog.dataset.questionId = questionId;
+  const effective = getEffectiveAnswer(question);
+  els.answerEditorQuestion.textContent = question.question;
+  if (question.type === "short") {
+    els.answerEditorOptions.innerHTML = `<textarea id="manualShortAnswer">${escapeHTML(effective.answer || question.explanation || "")}</textarea>`;
+  } else if (question.type === "judge") {
+    const selected = normalizeAnswerForType(effective.answer, "judge");
+    els.answerEditorOptions.innerHTML = [
+      ["A", "正确"],
+      ["B", "错误"]
+    ].map(([value, label]) => `
+      <label>
+        <input type="radio" name="manualAnswer" value="${value}" ${selected === value ? "checked" : ""}>
+        <strong>${label}</strong>
+      </label>
+    `).join("");
+  } else {
+    const selected = new Set(answerLetters(effective.answer));
+    const inputType = question.type === "multiple" ? "checkbox" : "radio";
+    els.answerEditorOptions.innerHTML = letters.map((letter) => `
+      <label>
+        <input type="${inputType}" name="manualAnswer" value="${letter}" ${selected.has(letter) ? "checked" : ""}>
+        <strong>${letter}</strong>
+        <span>${escapeHTML(question.options?.[letter] || "")}</span>
+      </label>
+    `).join("");
+  }
+  els.answerEditorDialog.showModal();
+}
+
+function saveManualAnswer() {
+  const questionId = els.answerEditorDialog?.dataset.questionId;
+  const question = getQuestion(questionId);
+  if (!question) return;
+  let answer = "";
+  if (question.type === "short") {
+    answer = document.querySelector("#manualShortAnswer")?.value.trim() || "";
+  } else {
+    answer = normalizeAnswerForType([...document.querySelectorAll("[name='manualAnswer']:checked")].map((input) => input.value).join(""), question.type);
+  }
+  if (!answer) {
+    showToast("请先选择或填写答案。");
+    return;
+  }
+  state.answerOverrides = state.answerOverrides || {};
+  state.answerOverrides[questionId] = {
+    answer,
+    answerSource: "manual",
+    answerConfidence: "high",
+    updatedAt: new Date().toISOString()
+  };
+  question.answer = answer;
+  question.answerSource = "manual";
+  question.answerConfidence = "high";
+  saveState();
+  els.answerEditorDialog.close();
+  render();
+  showToast("答案已保存为人工校正。");
+}
+
 function startPractice(title, questionIds, mode, meta = {}) {
   practiceSession = {
     bankId: meta.bankId || null,
@@ -668,7 +1020,8 @@ function startPractice(title, questionIds, mode, meta = {}) {
     selected: null,
     submitted: false,
     mode,
-    sessionType: meta.sessionType || "bank"
+    sessionType: meta.sessionType || "bank",
+    reviewResults: meta.reviewResults || {}
   };
   savePracticeProgress();
   showView("practice");
@@ -688,7 +1041,8 @@ function continueLastPractice() {
     selected: progress.selected || null,
     submitted: Boolean(progress.submitted),
     mode: progress.mode || "order",
-    sessionType: progress.sessionType || "bank"
+    sessionType: progress.sessionType || "bank",
+    reviewResults: progress.reviewResults || {}
   };
   showView("practice");
   renderPractice();
@@ -718,21 +1072,31 @@ function recordCurrentAnswer() {
 
   if (!practiceSession.submitted) {
     const stats = getStats(question.id);
-    const hasKnownAnswer = question.answer !== "UNKNOWN";
-    const isCorrect = hasKnownAnswer && isAnswerCorrect(practiceSession.selected, question.answer);
+    const reliable = hasReliableAnswer(question);
+    const effectiveAnswer = getEffectiveAnswer(question);
+    const isCorrect = reliable && isAnswerCorrect(practiceSession.selected, effectiveAnswer.answer);
     stats.attempts += 1;
     stats.lastAnsweredAt = new Date().toISOString();
-    if (!hasKnownAnswer) {
+    if (!reliable) {
       stats.consecutiveCorrect = 0;
     } else if (isCorrect) {
       stats.consecutiveCorrect += 1;
+      if (practiceSession.sessionType === "wrong-review") {
+        stats.correctInReviewCount = (stats.correctInReviewCount || 0) + 1;
+      }
     } else {
       stats.wrongAttempts += 1;
       stats.consecutiveCorrect = 0;
       stats.isWrong = true;
       stats.isMastered = false;
+      stats.lastWrongAt = new Date().toISOString();
+      if (practiceSession.sessionType === "wrong-review") {
+        stats.correctInReviewCount = 0;
+      }
     }
+    updateWrongReviewResult(question, reliable, isCorrect);
     practiceSession.submitted = true;
+    maybePromptMastered(question, reliable, isCorrect);
     savePracticeProgress();
     saveState();
     render();
@@ -744,6 +1108,10 @@ function nextQuestion() {
   if (practiceSession.index < practiceSession.questionIds.length - 1) {
     practiceSession.index += 1;
   } else {
+    if (practiceSession.sessionType === "wrong-review") {
+      finishWrongReviewRound();
+      return;
+    }
     practiceSession.index = 0;
   }
   practiceSession.selected = null;
@@ -773,6 +1141,34 @@ function submitOrNext() {
   nextQuestion();
 }
 
+function updateWrongReviewResult(question, reliable, isCorrect) {
+  if (practiceSession.sessionType !== "wrong-review") return;
+  practiceSession.reviewResults = practiceSession.reviewResults || {};
+  practiceSession.reviewResults[question.id] = reliable ? (isCorrect ? "correct" : "wrong") : "unknown";
+}
+
+function maybePromptMastered(question, reliable, isCorrect) {
+  if (practiceSession.sessionType !== "wrong-review" || !reliable || !isCorrect) return;
+  const stats = getStats(question.id);
+  if (stats.isMastered || (stats.correctInReviewCount || 0) < 2) return;
+  if (confirm("这道错题已连续复刷答对，是否标记为已掌握？")) {
+    stats.isMastered = true;
+  }
+}
+
+function finishWrongReviewRound() {
+  const results = practiceSession.reviewResults || {};
+  const correct = Object.values(results).filter((value) => value === "correct").length;
+  const needsReview = Math.max(practiceSession.questionIds.length - correct, 0);
+  els.answerPanel.classList.remove("hidden");
+  els.answerResult.textContent = "本轮错题复刷完成";
+  els.answerResult.style.color = "var(--text)";
+  els.correctAnswer.textContent = `本轮做对 ${correct} 题，仍需复习 ${needsReview} 题`;
+  els.explanation.textContent = "可以返回错题本继续按条件复刷。";
+  els.submitButton.textContent = "完成复刷";
+  showToast(`本轮错题复刷完成：做对 ${correct} 题，仍需复习 ${needsReview} 题。`);
+}
+
 function handlePracticeBlankTap(event) {
   if (!document.body.classList.contains("is-practice-view")) return;
   if (event.target.closest("button, .option-button, input, select, textarea, a")) return;
@@ -799,6 +1195,10 @@ function handlePracticeBlankTap(event) {
 
 function advanceFromBlankTap() {
   if (practiceSession.index >= practiceSession.questionIds.length - 1) {
+    if (practiceSession.sessionType === "wrong-review") {
+      finishWrongReviewRound();
+      return;
+    }
     showToast("已完成本轮练习。");
     return;
   }
@@ -807,7 +1207,7 @@ function advanceFromBlankTap() {
 
 function answerLetters(answer) {
   if (!answer || answer === "UNKNOWN") return [];
-  return normalizeAnswerString(answer).split("");
+  return normalizeAnswerForType(answer, "multiple").split("");
 }
 
 function selectedAnswerLetters() {
@@ -816,6 +1216,19 @@ function selectedAnswerLetters() {
 
 function normalizeAnswerString(answer) {
   return [...new Set(String(answer || "").toUpperCase().match(/[A-D]/g) || [])].sort().join("");
+}
+
+function normalizeAnswerForType(answer, type = "single") {
+  if (!answer || answer === "UNKNOWN") return "";
+  if (type === "short") return String(answer || "").trim();
+  if (type === "judge") {
+    const raw = String(answer || "").trim().toUpperCase();
+    if (/^(正确|对|TRUE|T|YES|Y|√)$/.test(raw)) return "A";
+    if (/^(错误|错|FALSE|F|NO|N|×|X)$/.test(raw)) return "B";
+  }
+  const normalized = normalizeAnswerString(answer);
+  if (type === "single" || type === "judge") return normalized.slice(0, 1);
+  return normalized;
 }
 
 function isAnswerCorrect(selected, correct) {
@@ -828,7 +1241,7 @@ function scheduleAutoNext(questionId) {
   window.clearTimeout(scheduleAutoNext.timer);
   scheduleAutoNext.timer = window.setTimeout(() => {
     const current = getQuestion(practiceSession.questionIds[practiceSession.index]);
-    if (current?.id === questionId && practiceSession.submitted && isAnswerCorrect(practiceSession.selected, current.answer)) {
+    if (current?.id === questionId && practiceSession.submitted && hasReliableAnswer(current) && isAnswerCorrect(practiceSession.selected, getEffectiveAnswer(current).answer)) {
       nextQuestion();
     }
   }, 650);
@@ -847,6 +1260,7 @@ function savePracticeProgress() {
     submitted: practiceSession.submitted,
     mode: practiceSession.mode,
     sessionType: practiceSession.sessionType,
+    reviewResults: practiceSession.reviewResults || {},
     updatedAt: new Date().toISOString()
   };
   rememberRecentPractice();
@@ -884,10 +1298,13 @@ async function handleFile(file) {
       state.collections.push(imported.collection);
     }
     state.banks.push(...imported.banks);
+    normalizeAllQuestionAnswerMetadata(imported.banks);
+    state.questionDataReport = buildQuestionDataErrorReport();
     saveState();
     render();
     const total = imported.banks.reduce((sum, bank) => sum + bank.questions.length, 0);
-    showToast(imported.collection ? `已导入「${imported.collection.name}」，${imported.banks.length} 个单元，共 ${total} 道题。` : `已导入 ${imported.banks.length} 个题库，共 ${total} 道题。`);
+    const auditCount = state.questionDataReport.items.length;
+    showToast(imported.collection ? `已导入「${imported.collection.name}」，${imported.banks.length} 个单元，共 ${total} 道题。待校对 ${auditCount} 题。` : `已导入 ${imported.banks.length} 个题库，共 ${total} 道题。待校对 ${auditCount} 题。`);
   } catch (error) {
     showToast(error.message || "导入失败，请检查文件格式。");
   } finally {
@@ -1035,13 +1452,21 @@ async function extractPDFQuestions(file) {
 
     if (matchedAnswer) {
       question.answer = matchedAnswer;
+      question.importedAnswer = matchedAnswer;
+      question.answerSource = "imported";
+      question.answerConfidence = "low";
       if (question.explanation === "PDF 未能识别原文中的下划线/斜体答案标记。") {
         question.explanation = "";
       }
+    } else {
+      question.answer = "";
+      question.importedAnswer = "";
+      question.answerSource = "unknown";
+      question.answerConfidence = "low";
     }
   });
 
-  const knownAnswers = questions.filter((question) => question.answer !== "UNKNOWN").length;
+  const knownAnswers = questions.filter((question) => question.answer).length;
   if (knownAnswers > 0 && knownAnswers < questions.length) {
     showToast(`已识别 ${knownAnswers}/${questions.length} 道题的答案。`);
   }
@@ -1511,9 +1936,15 @@ function parseNumberedChoiceBlock(block, fallbackRowNumber, format, options) {
 
 function normalizeQuestion(row, rowNumber, format, parseOptions = {}) {
   const question = String(row.question || "").trim();
-  const answer = normalizeAnswerString(row.answer);
   const rawType = String(row.type || "single").trim().toLowerCase();
-  const type = ["multiple", "multiplechoice", "multi", "多选", "多选题", "多项选择题"].includes(rawType) ? "multiple" : "single";
+  const type = ["multiple", "multiplechoice", "multi", "多选", "多选题", "多项选择题"].includes(rawType)
+    ? "multiple"
+    : ["short", "简答", "简答题", "essay"].includes(rawType)
+      ? "short"
+      : ["judge", "判断", "判断题", "truefalse"].includes(rawType)
+        ? "judge"
+        : "single";
+  const answer = normalizeAnswerForType(row.answer, type);
   const answerOptions = {
     A: String(row.options.A || "").trim(),
     B: String(row.options.B || "").trim(),
@@ -1522,16 +1953,21 @@ function normalizeQuestion(row, rowNumber, format, parseOptions = {}) {
   };
 
   if (!question) throw new Error(`${format} 第 ${rowNumber} 题缺少题干。`);
-  letters.forEach((letter) => {
-    if (!answerOptions[letter]) throw new Error(`${format} 第 ${rowNumber} 题缺少选项 ${letter}。`);
-  });
-  if (answer && !/^[A-D]{1,4}$/.test(answer)) throw new Error(`${format} 第 ${rowNumber} 题答案必须由 A、B、C、D 组成。`);
+  if (type !== "short") {
+    letters.forEach((letter) => {
+      if (!answerOptions[letter]) throw new Error(`${format} 第 ${rowNumber} 题缺少选项 ${letter}。`);
+    });
+  }
+  if (type !== "short" && answer && !/^[A-D]{1,4}$/.test(answer)) throw new Error(`${format} 第 ${rowNumber} 题答案必须由 A、B、C、D 组成。`);
   if (!answer && !parseOptions.allowUnknownAnswer) throw new Error(`${format} 第 ${rowNumber} 题缺少答案。`);
 
   return {
     question,
     options: answerOptions,
-    answer: answer || "UNKNOWN",
+    answer,
+    importedAnswer: answer,
+    answerSource: answer ? "imported" : "unknown",
+    answerConfidence: answer ? (parseOptions.lowConfidenceAnswers ? "low" : "high") : "low",
     explanation: String(row.explanation || "").trim(),
     type,
     source: String(row.source || "导入题库").trim(),
@@ -1576,7 +2012,10 @@ function deleteBank(bankId) {
   const bank = state.banks.find((item) => item.id === bankId);
   if (!bank) return;
   if (!confirm(`删除题库「${bank.name}」？`)) return;
-  bank.questions.forEach((question) => delete state.stats[question.id]);
+  bank.questions.forEach((question) => {
+    delete state.stats[question.id];
+    delete state.answerOverrides?.[question.id];
+  });
   state.banks = state.banks.filter((item) => item.id !== bankId);
   saveState();
   render();
@@ -1590,7 +2029,10 @@ function deleteCollection(collectionId) {
   const unitIds = new Set(state.banks.filter((bank) => bank.collectionId === collectionId).map((bank) => bank.id));
   state.banks
     .filter((bank) => unitIds.has(bank.id))
-    .forEach((bank) => bank.questions.forEach((question) => delete state.stats[question.id]));
+    .forEach((bank) => bank.questions.forEach((question) => {
+      delete state.stats[question.id];
+      delete state.answerOverrides?.[question.id];
+    }));
   state.banks = state.banks.filter((bank) => bank.collectionId !== collectionId);
   state.collections = (state.collections || []).filter((item) => item.id !== collectionId);
   practiceSession.collectionId = null;
@@ -1675,6 +2117,8 @@ els.quickUnits.addEventListener("click", () => {
 });
 els.quickWrong.addEventListener("click", () => showView("wrong"));
 els.quickFavorite.addEventListener("click", () => showView("favorite"));
+els.quickAudit.addEventListener("click", () => showView("audit"));
+els.startWrongReviewButton.addEventListener("click", startWrongReview);
 els.startCollectionRandom.addEventListener("click", () => {
   const collection = getCurrentCollection();
   if (collection) {
@@ -1692,6 +2136,11 @@ document.querySelectorAll("[data-wrong-filter]").forEach((button) => {
 });
 els.wrongBankFilter.addEventListener("change", () => {
   wrongBankFilter = els.wrongBankFilter.value;
+  renderWrong();
+});
+els.wrongSubjectFilter.addEventListener("change", () => {
+  wrongSubjectFilter = els.wrongSubjectFilter.value;
+  wrongBankFilter = "all";
   renderWrong();
 });
 els.wrongTypeFilter.addEventListener("change", () => {
@@ -1715,6 +2164,12 @@ els.favoriteButton.addEventListener("click", () => {
   renderFavorites();
   renderPractice();
 });
+els.editAnswerButton.addEventListener("click", () => {
+  const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
+  if (question) openAnswerEditor(question.id);
+});
+els.saveAnswerEdit.addEventListener("click", saveManualAnswer);
+els.cancelAnswerEdit.addEventListener("click", () => els.answerEditorDialog.close());
 els.removeWrongButton.addEventListener("click", () => {
   const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
   if (!question) return;
@@ -1745,5 +2200,7 @@ window.PracticeParser = {
   parseCSVQuestions
 };
 
+migrateLoadedState();
+saveState();
 render();
 ensureBuiltinModernHistory();

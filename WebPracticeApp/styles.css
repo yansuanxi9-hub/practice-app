@@ -548,6 +548,74 @@ button {
   text-align: center;
 }
 
+.answer-report {
+  display: grid;
+  gap: 6px;
+  margin: 18px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fafafa;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.answer-report strong {
+  color: var(--text);
+}
+
+.answer-editor {
+  width: min(520px, calc(100vw - 32px));
+  padding: 20px;
+  border: 0;
+}
+
+dialog {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.answer-editor h2 {
+  margin: 0 0 10px;
+}
+
+.answer-editor p {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.answer-editor-options {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.answer-editor-options label {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.answer-editor-options textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.answer-editor-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
 .memory-card {
   display: grid;
   gap: 16px;
@@ -598,8 +666,28 @@ button {
   align-items: center;
 }
 
+.wrong-question-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
 .question-row .wrong-meta {
   grid-column: 1;
+}
+
+.question-row-actions {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.text-button {
+  min-height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-weight: 800;
 }
 
 .question-row .ghost-button {
@@ -613,6 +701,10 @@ button {
   margin: 0 0 18px;
 }
 
+.wrong-filter-row {
+  grid-template-columns: repeat(3, 1fr);
+}
+
 .filter-select {
   min-height: 40px;
   padding: 0 12px;
@@ -620,6 +712,35 @@ button {
   border-radius: 8px;
   background: #fff;
   color: var(--text);
+}
+
+.review-start-button {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-height: 64px;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--button);
+  border-radius: 10px;
+  background: var(--button);
+  color: #fff;
+  text-align: left;
+}
+
+.review-start-button span {
+  color: rgba(255, 255, 255, 0.74);
+  font-size: 14px;
+}
+
+.review-start-button:disabled {
+  border-color: var(--line);
+  background: #f4f4f4;
+  color: var(--muted);
+}
+
+.review-start-button:disabled span {
+  color: var(--muted);
 }
 
 .empty-row {
