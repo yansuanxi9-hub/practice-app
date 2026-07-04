@@ -84,7 +84,7 @@ button {
   line-height: 1.03;
 }
 
-.home-hero > p:not(.app-mark):not(.support-text),
+.home-hero > p:not(.app-mark):not(.support-text):not(.storage-notice),
 .page-heading p,
 .bank-row p,
 .question-row p,
@@ -94,7 +94,7 @@ button {
   color: var(--muted);
 }
 
-.home-hero > p:not(.app-mark):not(.support-text) {
+.home-hero > p:not(.app-mark):not(.support-text):not(.storage-notice) {
   max-width: 440px;
   margin: 14px 0 26px;
   line-height: 1.65;
@@ -104,6 +104,21 @@ button {
   margin: 12px 0 0;
   text-align: center;
   font-size: 14px;
+}
+
+.storage-notice {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.storage-warning {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafafa;
+  color: var(--text);
 }
 
 .import-button,
@@ -605,6 +620,15 @@ dialog {
   width: 100%;
   min-height: 120px;
   padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.audit-short-answer {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   font: inherit;

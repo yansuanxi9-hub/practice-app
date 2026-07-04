@@ -111,6 +111,7 @@ const els = {
   quickWrong: document.querySelector("#quickWrong"),
   quickFavorite: document.querySelector("#quickFavorite"),
   quickAudit: document.querySelector("#quickAudit"),
+  storageNotice: document.querySelector("#storageNotice"),
   recentList: document.querySelector("#recentList"),
   bankList: document.querySelector("#bankList"),
   unitList: document.querySelector("#unitList"),
@@ -149,11 +150,15 @@ const els = {
   backToBanks: document.querySelector("#backToBanks"),
   toast: document.querySelector("#toast"),
   exportButton: document.querySelector("#exportButton"),
+  importBackupButton: document.querySelector("#importBackupButton"),
+  backupInput: document.querySelector("#backupInput"),
   resetProgressButton: document.querySelector("#resetProgressButton"),
   clearAllButton: document.querySelector("#clearAllButton"),
   auditOverview: document.querySelector("#auditOverview"),
   auditList: document.querySelector("#auditList"),
   answerReport: document.querySelector("#answerReport"),
+  startAuditReviewButton: document.querySelector("#startAuditReviewButton"),
+  auditReviewSummary: document.querySelector("#auditReviewSummary"),
   answerEditorDialog: document.querySelector("#answerEditorDialog"),
   answerEditorQuestion: document.querySelector("#answerEditorQuestion"),
   answerEditorOptions: document.querySelector("#answerEditorOptions"),
@@ -189,7 +194,32 @@ function defaultState() {
 }
 
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
+  } catch {
+    showStorageWarning(true);
+    return false;
+  }
+}
+
+function isStorageAvailable() {
+  try {
+    const key = `${STORAGE_KEY}-storage-test`;
+    localStorage.setItem(key, "1");
+    localStorage.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function showStorageWarning(isSevere = false) {
+  if (!els.storageNotice) return;
+  els.storageNotice.textContent = isSevere
+    ? "当前浏览器可能无法保存学习记录，请关闭无痕模式或导出备份。"
+    : "学习记录保存在当前浏览器中。请尽量不要使用无痕/隐私模式，否则记录可能丢失。";
+  els.storageNotice.classList.toggle("storage-warning", isSevere);
 }
 
 function migrateLoadedState() {
@@ -219,7 +249,6 @@ async function ensureBuiltinModernHistory() {
     ];
     normalizeAllQuestionAnswerMetadata(state.banks);
     applyBuiltInManualCorrections();
-    state.stats = {};
     state.answerOverrides = state.answerOverrides || {};
     state.questionDataReport = buildQuestionDataErrorReport();
     state.builtinDataVersion = BUILTIN_DATA_VERSION;
@@ -383,6 +412,7 @@ function buildQuestionDataErrorReport() {
         type: question.type,
         answer: getEffectiveAnswer(question).answer,
         source: question.bankName || question.source,
+        sourcePages: question.sourcePages || [],
         reason: issue
       });
     }
@@ -394,7 +424,8 @@ function buildQuestionDataErrorReport() {
       unknownAnswerCount: items.filter((item) => item.reason.includes("未识别")).length,
       lowConfidenceCount: items.filter((item) => item.reason.includes("低置信度")).length,
       multipleAnswerIssueCount: items.filter((item) => item.reason.includes("多选")).length,
-      typeMismatchCount: items.filter((item) => item.reason.includes("题型")).length
+      typeMismatchCount: items.filter((item) => item.reason.includes("题型")).length,
+      pageBreakIssueCount: items.filter((item) => item.reason.includes("换页")).length
     },
     items
   };
@@ -405,6 +436,7 @@ function getQuestionAnswerIssue(question) {
   const answer = effective.answer;
   if (effective.source === "manual" && effective.confidence === "high") return "";
   if (!answer) return "答案未识别";
+  if (question.pageBreakIssue) return "疑似换页断题";
   if (question.type === "single" && answer.length !== 1) return "题型与答案不匹配";
   if (question.type === "multiple" && !/^[A-D]{2,4}$/.test(answer)) return "多选题答案异常";
   if (/疑似|未识别|异常/.test(question.explanation || "")) return "解析提示异常";
@@ -685,7 +717,7 @@ function renderFavorites() {
         <h3>${escapeHTML(question.question)}</h3>
         <p>${escapeHTML(getQuestionSourceText(question))}</p>
       </div>
-      <button class="ghost-button" onclick="startQuestionPractice('${question.id}')">重新练习</button>
+      <button class="ghost-button" onclick="startQuestionPractice('${question.id}', 'favorite')">重新练习</button>
       <button class="ghost-button" onclick="toggleFavoriteById('${question.id}')">取消收藏</button>
     `;
     els.favoriteList.append(row);
@@ -697,12 +729,17 @@ function renderAudit() {
   const report = buildQuestionDataErrorReport();
   state.questionDataReport = report;
   els.auditOverview.textContent = `${report.items.length} 道题需核对`;
+  if (els.startAuditReviewButton) {
+    els.startAuditReviewButton.disabled = report.items.length === 0;
+    els.auditReviewSummary.textContent = report.items.length ? `共 ${report.items.length} 题` : "暂无待校对题";
+  }
   els.answerReport.innerHTML = `
     <strong>question-data-error-report</strong>
     <span>未识别答案：${report.summary.unknownAnswerCount}</span>
     <span>低置信度答案：${report.summary.lowConfidenceCount}</span>
     <span>多选答案异常：${report.summary.multipleAnswerIssueCount}</span>
     <span>题型与答案不匹配：${report.summary.typeMismatchCount}</span>
+    <span>疑似换页断题：${report.summary.pageBreakIssueCount || 0}</span>
   `;
 
   if (report.items.length === 0) {
@@ -722,13 +759,39 @@ function renderAudit() {
         <p class="row-type">${getQuestionTypeLabel(question.type)}</p>
         <h3>${escapeHTML(question.question)}</h3>
         <p>${escapeHTML(getQuestionSourceText(question))}</p>
+        ${formatSourcePages(question.sourcePages).length ? `<p>来源页：${formatSourcePages(question.sourcePages)}</p>` : ""}
         <p>当前答案：${escapeHTML(effective.answer || "未识别")} · ${escapeHTML(item.reason)}</p>
       </div>
-      <button class="ghost-button" onclick="startQuestionPractice('${question.id}')">查看题目</button>
-      <button class="primary-button" onclick="openAnswerEditor('${question.id}')">修改答案</button>
+      <button class="ghost-button" onclick="startAuditReview('${question.id}')">查看题目</button>
+      <button class="primary-button" onclick="startAuditReview('${question.id}')">修改答案</button>
     `;
     els.auditList.append(row);
   });
+}
+
+function getAuditQuestions() {
+  return buildQuestionDataErrorReport().items.map((item) => getQuestion(item.id)).filter(Boolean);
+}
+
+function startAuditReview(startQuestionId = null) {
+  const questions = getAuditQuestions();
+  if (questions.length === 0) {
+    showToast("暂无待校对题。");
+    return;
+  }
+  const startIndex = Math.max(questions.findIndex((question) => question.id === startQuestionId), 0);
+  startPractice("答案连续校对", questions.map((question) => question.id), "order", {
+    sessionType: "answer-audit",
+    returnTo: "audit",
+    startIndex
+  });
+}
+
+function formatSourcePages(pages = []) {
+  const clean = [...new Set((pages || []).filter(Boolean))].sort((a, b) => a - b);
+  if (clean.length === 0) return "";
+  if (clean.length === 1) return `第 ${clean[0]} 页`;
+  return `第 ${clean[0]}-${clean[clean.length - 1]} 页`;
 }
 
 function renderFilterOptions(select, value) {
@@ -788,6 +851,7 @@ function renderPractice() {
   const effectiveAnswer = getEffectiveAnswer(question);
   const correctAnswers = answerLetters(effectiveAnswer.answer);
   const isMultipleChoice = question.type === "multiple";
+  const isAuditMode = practiceSession.sessionType === "answer-audit";
   els.practiceSource.textContent = "";
   els.questionTypeMeta.textContent = `${getShortChapterLabel(question)} · ${getQuestionTypeLabel(question.type)}`;
   els.questionStem.textContent = question.question;
@@ -795,6 +859,10 @@ function renderPractice() {
   els.favoriteButton.textContent = stats.isFavorite ? "★" : "☆";
   els.optionList.innerHTML = "";
   if (question.type === "short") {
+    if (isAuditMode) {
+      renderAuditShortQuestion(question);
+      return;
+    }
     renderShortQuestion(question, stats);
     return;
   }
@@ -803,20 +871,34 @@ function renderPractice() {
     const button = document.createElement("button");
     button.className = "option-button";
     if (selectedAnswers.includes(letter)) button.classList.add("selected");
-    if (practiceSession.submitted && hasReliableAnswer(question) && correctAnswers.includes(letter)) button.classList.add("correct");
-    if (practiceSession.submitted && hasReliableAnswer(question) && selectedAnswers.includes(letter) && !correctAnswers.includes(letter)) button.classList.add("wrong");
-    button.disabled = practiceSession.submitted;
+    if (!isAuditMode && practiceSession.submitted && hasReliableAnswer(question) && correctAnswers.includes(letter)) button.classList.add("correct");
+    if (!isAuditMode && practiceSession.submitted && hasReliableAnswer(question) && selectedAnswers.includes(letter) && !correctAnswers.includes(letter)) button.classList.add("wrong");
+    button.disabled = !isAuditMode && practiceSession.submitted;
     button.innerHTML = `<span class="option-letter">${letter}</span><span>${escapeHTML(question.options[letter])}</span>`;
     button.addEventListener("click", (event) => {
       event.stopPropagation();
-      if (!practiceSession.submitted) {
+      if (isAuditMode) {
+        chooseAuditAnswer(letter, isMultipleChoice);
+      } else if (!practiceSession.submitted) {
         chooseAnswer(letter, isMultipleChoice);
       }
     });
     els.optionList.append(button);
   });
 
-  if (practiceSession.submitted) {
+  if (isAuditMode) {
+    els.answerPanel.classList.add("hidden");
+    els.submitButton.textContent = practiceSession.index === practiceSession.questionIds.length - 1 ? "保存并完成" : "保存并下一题";
+    els.submitButton.disabled = false;
+    els.submitButton.classList.remove("hidden");
+    els.removeWrongButton.classList.add("hidden");
+    if (selectedAnswers.length > 0) {
+      els.selectionHint.classList.remove("hidden");
+      els.selectionHint.textContent = `校对答案：${selectedAnswers.join("、")}`;
+    } else {
+      els.selectionHint.classList.add("hidden");
+    }
+  } else if (practiceSession.submitted) {
     const reliable = hasReliableAnswer(question);
     const isCorrect = reliable && isAnswerCorrect(practiceSession.selected, effectiveAnswer.answer, question.type);
     els.answerPanel.classList.toggle("hidden", reliable && isCorrect && question.type !== "short");
@@ -851,6 +933,20 @@ function renderPractice() {
   document.querySelectorAll(".segmented").forEach((button) => {
     button.classList.toggle("active", button.dataset.mode === practiceSession.mode);
   });
+}
+
+function renderAuditShortQuestion(question) {
+  els.optionList.innerHTML = `
+    <article class="memory-card">
+      <textarea id="auditShortAnswer" class="audit-short-answer" placeholder="填写参考答案">${escapeHTML(getCorrectAnswer(question).answer || question.explanation || "")}</textarea>
+    </article>
+  `;
+  els.selectionHint.classList.add("hidden");
+  els.answerPanel.classList.add("hidden");
+  els.submitButton.textContent = practiceSession.index === practiceSession.questionIds.length - 1 ? "保存并完成" : "保存并下一题";
+  els.submitButton.disabled = false;
+  els.submitButton.classList.remove("hidden");
+  els.removeWrongButton.classList.add("hidden");
 }
 
 function renderShortQuestion(question, stats) {
@@ -891,7 +987,7 @@ function startBankPractice(bankId, mode) {
   const bank = state.banks.find((item) => item.id === bankId);
   if (!bank || bank.questions.length === 0) return;
   const questionIds = bank.questions.map((question) => question.id);
-  startPractice(bank.name, mode === "random" ? shuffle(questionIds) : questionIds, mode, { bankId, sessionType: "bank" });
+  startPractice(bank.name, mode === "random" ? shuffle(questionIds) : questionIds, mode, { bankId, sessionType: "bank", returnTo: bank.collectionId ? "units" : "banks" });
 }
 
 function openCollection(collectionId) {
@@ -904,13 +1000,13 @@ function startCollectionPractice(collectionId, mode) {
   const units = state.banks.filter((bank) => bank.collectionId === collectionId);
   const questionIds = units.flatMap((bank) => bank.questions.map((question) => question.id));
   if (questionIds.length === 0) return;
-  startPractice(collection?.name || "合集刷题", mode === "random" ? shuffle(questionIds) : questionIds, mode, { collectionId, sessionType: "collection" });
+  startPractice(collection?.name || "合集刷题", mode === "random" ? shuffle(questionIds) : questionIds, mode, { collectionId, sessionType: "collection", returnTo: "units" });
 }
 
-function startQuestionPractice(questionId) {
+function startQuestionPractice(questionId, returnTo = "wrong") {
   const question = getQuestion(questionId);
   if (!question) return;
-  startPractice(question.bankName || "错题复刷", [questionId], "order", { sessionType: "single-question" });
+  startPractice(question.bankName || "查看题目", [questionId], "order", { sessionType: "single-question", returnTo });
 }
 
 function startWrongReview() {
@@ -922,7 +1018,8 @@ function startWrongReview() {
   const title = buildWrongReviewTitle(questions);
   startPractice(title, questions.map((question) => question.id), "order", {
     sessionType: "wrong-review",
-    reviewResults: {}
+    reviewResults: {},
+    returnTo: "wrong"
   });
 }
 
@@ -981,6 +1078,9 @@ function openAnswerEditor(questionId) {
       </label>
     `).join("");
   }
+  els.saveAnswerEdit.textContent = document.body.classList.contains("is-practice-view") && practiceSession.submitted
+    ? "保存答案并重新判断"
+    : "保存";
   els.answerEditorDialog.showModal();
 }
 
@@ -998,20 +1098,32 @@ function saveManualAnswer() {
     showToast("请先选择或填写答案。");
     return;
   }
-  state.answerOverrides = state.answerOverrides || {};
-  state.answerOverrides[questionId] = {
-    answer,
-    answerSource: "manual",
-    answerConfidence: "high",
-    updatedAt: new Date().toISOString()
-  };
-  question.answer = answer;
-  question.answerSource = "manual";
-  question.answerConfidence = "high";
+  applyManualAnswer(question, answer);
+  rejudgeCurrentAnswerAfterManualFix(question);
   saveState();
   els.answerEditorDialog.close();
+  els.saveAnswerEdit.textContent = "保存";
   render();
   showToast("答案已保存为人工校正。");
+}
+
+function rejudgeCurrentAnswerAfterManualFix(question) {
+  const currentId = practiceSession.questionIds[practiceSession.index];
+  if (currentId !== question.id || !practiceSession.submitted || !practiceSession.selected) return;
+  const effective = getCorrectAnswer(question);
+  if (!effective.answer) return;
+  const stats = getStats(question.id);
+  const isCorrect = isAnswerCorrect(practiceSession.selected, effective.answer, question.type);
+  if (isCorrect) {
+    stats.consecutiveCorrect += 1;
+  } else {
+    stats.wrongAttempts += 1;
+    stats.consecutiveCorrect = 0;
+    stats.isWrong = true;
+    stats.isMastered = false;
+    stats.lastWrongAt = new Date().toISOString();
+  }
+  stats.lastAnsweredAt = new Date().toISOString();
 }
 
 function startPractice(title, questionIds, mode, meta = {}) {
@@ -1021,12 +1133,13 @@ function startPractice(title, questionIds, mode, meta = {}) {
     title,
     sourceTitle: title,
     questionIds,
-    index: 0,
+    index: meta.startIndex || 0,
     selected: null,
     submitted: false,
     mode,
     sessionType: meta.sessionType || "bank",
-    reviewResults: meta.reviewResults || {}
+    reviewResults: meta.reviewResults || {},
+    returnTo: meta.returnTo || "banks"
   };
   savePracticeProgress();
   showView("practice");
@@ -1047,7 +1160,8 @@ function continueLastPractice() {
     submitted: Boolean(progress.submitted),
     mode: progress.mode || "order",
     sessionType: progress.sessionType || "bank",
-    reviewResults: progress.reviewResults || {}
+    reviewResults: progress.reviewResults || {},
+    returnTo: progress.returnTo || "banks"
   };
   showView("practice");
   renderPractice();
@@ -1069,6 +1183,59 @@ function chooseAnswer(letter, isMultipleChoice = false) {
 
   practiceSession.selected = letter;
   recordCurrentAnswer();
+}
+
+function chooseAuditAnswer(letter, isMultipleChoice = false) {
+  if (isMultipleChoice) {
+    const selected = new Set(selectedAnswerLetters());
+    if (selected.has(letter)) selected.delete(letter);
+    else selected.add(letter);
+    practiceSession.selected = normalizeAnswer([...selected].join(""), "multiple", { allowSingleMultiple: true });
+  } else {
+    practiceSession.selected = letter;
+  }
+  savePracticeProgress();
+  renderPractice();
+}
+
+function saveAuditAnswerAndNext() {
+  const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
+  if (!question) return;
+  const rawAnswer = question.type === "short" ? document.querySelector("#auditShortAnswer")?.value : practiceSession.selected;
+  const answer = normalizeAnswer(rawAnswer, question.type, { allowSingleMultiple: true });
+  if (!answer) {
+    showToast("请先选择或填写正确答案。");
+    return;
+  }
+  applyManualAnswer(question, answer);
+  if (practiceSession.index < practiceSession.questionIds.length - 1) {
+    practiceSession.index += 1;
+    practiceSession.selected = null;
+    practiceSession.submitted = false;
+    savePracticeProgress();
+    saveState();
+    renderPractice();
+  } else {
+    saveState();
+    finishAuditReviewRound();
+  }
+}
+
+function applyManualAnswer(question, answer) {
+  const normalized = normalizeAnswer(answer, question.type, { allowSingleMultiple: true });
+  if (!normalized) return false;
+  state.answerOverrides = state.answerOverrides || {};
+  state.answerOverrides[question.id] = {
+    answer: normalized,
+    answerSource: "manual",
+    answerConfidence: "high",
+    updatedAt: new Date().toISOString()
+  };
+  question.manualAnswer = normalized;
+  question.answer = normalized;
+  question.answerSource = "manual";
+  question.answerConfidence = "high";
+  return true;
 }
 
 function recordCurrentAnswer() {
@@ -1138,6 +1305,14 @@ function previousQuestion() {
 }
 
 function submitOrNext() {
+  if (practiceSession.sessionType === "answer-audit") {
+    if (practiceSession.submitted && practiceSession.index >= practiceSession.questionIds.length - 1) {
+      showView("audit");
+      return;
+    }
+    saveAuditAnswerAndNext();
+    return;
+  }
   const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
   if (question?.type === "multiple" && !practiceSession.submitted && practiceSession.selected) {
     recordCurrentAnswer();
@@ -1172,6 +1347,20 @@ function finishWrongReviewRound() {
   els.explanation.textContent = "可以返回错题本继续按条件复刷。";
   els.submitButton.textContent = "完成复刷";
   showToast(`本轮错题复刷完成：做对 ${correct} 题，仍需复习 ${needsReview} 题。`);
+}
+
+function finishAuditReviewRound() {
+  els.answerPanel.classList.remove("hidden");
+  els.answerResult.textContent = "答案校对完成";
+  els.answerResult.style.color = "var(--text)";
+  els.correctAnswer.textContent = `本轮已校对 ${practiceSession.questionIds.length} 题`;
+  els.explanation.textContent = "可以返回答案待校对继续检查剩余题目。";
+  els.submitButton.textContent = "返回答案待校对";
+  practiceSession.submitted = true;
+  practiceSession.selected = null;
+  savePracticeProgress();
+  renderAudit();
+  showToast("答案校对完成。");
 }
 
 function handlePracticeBlankTap(event) {
@@ -1291,6 +1480,7 @@ function savePracticeProgress() {
     mode: practiceSession.mode,
     sessionType: practiceSession.sessionType,
     reviewResults: practiceSession.reviewResults || {},
+    returnTo: practiceSession.returnTo || "banks",
     updatedAt: new Date().toISOString()
   };
   rememberRecentPractice();
@@ -1360,20 +1550,33 @@ function makeBanksFromImportedQuestions(questions, fileName, shouldSplitBySource
   });
 
   const collection = shouldSplitBySource ? {
-    id: crypto.randomUUID(),
+    id: stableId("collection", fallbackName),
     name: `${fallbackName} 合集`,
     description: `${groups.size} 个单元，来自 ${fileName}`
   } : null;
 
   const banks = [...groups.entries()].map(([source, groupQuestions]) => ({
-    id: crypto.randomUUID(),
+    id: stableId("bank", fallbackName, source),
     collectionId: collection?.id,
     name: source,
     description: `${groupQuestions.length} 道题，来自 ${fileName}`,
-    questions: groupQuestions.map((question) => ({ ...question, id: crypto.randomUUID() }))
+    questions: groupQuestions.map((question) => ({
+      ...question,
+      id: question.id || stableId("question", fallbackName, source, question.rowNumber || "", question.question, JSON.stringify(question.options || {}))
+    }))
   }));
 
   return { collection, banks };
+}
+
+function stableId(...parts) {
+  const text = parts.join("|");
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `id-${(hash >>> 0).toString(36)}`;
 }
 
 async function extractDOCXText(file) {
@@ -1434,6 +1637,16 @@ function xmlToText(xml) {
 }
 
 async function extractPDFText(file) {
+  const pageTexts = await extractPDFPageTexts(file);
+  const text = repairExtractedPDFText(pageTexts.map((page) => page.text).join("\n"));
+  if (!text.trim()) {
+    throw new Error("没有从 PDF 中提取到文字。扫描版或图片版 PDF 暂不支持。");
+  }
+
+  return text;
+}
+
+async function extractPDFPageTexts(file) {
   const PDFReader = typeof window !== "undefined" ? window.PracticePDFReader : null;
   if (!PDFReader) {
     throw new Error("PDF 解析组件未加载，请刷新页面后再试。");
@@ -1450,19 +1663,15 @@ async function extractPDFText(file) {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    pageTexts.push(pdfItemsToText(content.items));
+    pageTexts.push({ pageNumber, text: pdfItemsToText(content.items) });
   }
 
-  const text = repairExtractedPDFText(pageTexts.join("\n"));
-  if (!text.trim()) {
-    throw new Error("没有从 PDF 中提取到文字。扫描版或图片版 PDF 暂不支持。");
-  }
-
-  return text;
+  return pageTexts;
 }
 
 async function extractPDFQuestions(file) {
-  const text = await extractPDFText(file);
+  const pageTexts = await extractPDFPageTexts(file);
+  const text = buildPDFTextStream(pageTexts);
   const questions = parseImportedText(text, "PDF", {
     source: file.name.replace(/\.[^.]+$/, ""),
     allowUnknownAnswer: true
@@ -1502,6 +1711,17 @@ async function extractPDFQuestions(file) {
   }
 
   return questions;
+}
+
+function buildPDFTextStream(pageTexts) {
+  const text = pageTexts
+    .map((page) => `\n[[PAGE:${page.pageNumber}]]\n${page.text}`)
+    .join("\n");
+  const repaired = repairExtractedPDFText(text);
+  if (!repaired.replace(/\[\[PAGE:\d+\]\]/g, "").trim()) {
+    throw new Error("没有从 PDF 中提取到文字。扫描版或图片版 PDF 暂不支持。");
+  }
+  return repaired;
 }
 
 async function extractPDFUnderlinedAnswers(file) {
@@ -1851,8 +2071,16 @@ function parseNumberedChoiceQuestions(text, format = "PDF", options = {}) {
   let current = null;
   let currentChoiceType = null;
   let currentChapter = options.source || "PDF 导入题库";
+  let currentPage = null;
 
   lines.forEach((line) => {
+    const pageMatch = line.match(/^\[\[PAGE:(\d+)\]\]$/);
+    if (pageMatch) {
+      currentPage = Number(pageMatch[1]);
+      if (current) current.pages.add(currentPage);
+      return;
+    }
+
     if (/^第.+章/.test(line)) {
       currentChapter = line;
       return;
@@ -1890,12 +2118,14 @@ function parseNumberedChoiceQuestions(text, format = "PDF", options = {}) {
         rowNumber: Number(questionMatch[1]),
         type: currentChoiceType,
         source: currentChapter,
+        pages: new Set(currentPage ? [currentPage] : []),
         lines: [questionMatch[2]]
       };
       return;
     }
 
     if (current) {
+      if (currentPage) current.pages.add(currentPage);
       current.lines.push(line);
     }
   });
@@ -1957,7 +2187,9 @@ function parseNumberedChoiceBlock(block, fallbackRowNumber, format, options) {
     answer: "",
     explanation: "PDF 未能识别原文中的下划线/斜体答案标记。",
     type: block.type || "single",
-    source: block.source || options.source
+    source: block.source || options.source,
+    sourcePages: [...(block.pages || [])].sort((a, b) => a - b),
+    pageBreakIssue: block.pages && block.pages.size > 1
   }, block.rowNumber || fallbackRowNumber, format, {
     ...options,
     allowUnknownAnswer: true
@@ -2001,6 +2233,8 @@ function normalizeQuestion(row, rowNumber, format, parseOptions = {}) {
     explanation: String(row.explanation || "").trim(),
     type,
     source: String(row.source || "导入题库").trim(),
+    sourcePages: Array.isArray(row.sourcePages) ? row.sourcePages : [],
+    pageBreakIssue: Boolean(row.pageBreakIssue),
     rowNumber
   };
 }
@@ -2078,6 +2312,14 @@ function showView(name) {
   render();
 }
 
+function goBack() {
+  if (document.body.classList.contains("is-practice-view")) {
+    showView(practiceSession.returnTo || "banks");
+    return;
+  }
+  showView("banks");
+}
+
 function showToast(message) {
   els.toast.textContent = message;
   els.toast.classList.remove("hidden");
@@ -2109,9 +2351,88 @@ function exportData() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = "刷题数据备份.json";
+  link.download = `刷题学习记录备份-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+async function importLearningRecord(file) {
+  try {
+    const backup = JSON.parse(await file.text());
+    mergeStateFromBackup(backup);
+    migrateLoadedState();
+    saveState();
+    render();
+    showToast("学习记录已合并导入。");
+  } catch (error) {
+    showToast(error.message || "导入学习记录失败，请确认是之前导出的 JSON。");
+  } finally {
+    els.backupInput.value = "";
+  }
+}
+
+function mergeStateFromBackup(backup) {
+  if (!backup || typeof backup !== "object") throw new Error("备份文件格式不正确。");
+  const currentBankIds = new Set(state.banks.map((bank) => bank.id));
+  (backup.banks || []).forEach((bank) => {
+    if (bank?.id && !currentBankIds.has(bank.id)) {
+      state.banks.push(bank);
+      currentBankIds.add(bank.id);
+    }
+  });
+
+  const currentCollectionIds = new Set((state.collections || []).map((collection) => collection.id));
+  (backup.collections || []).forEach((collection) => {
+    if (collection?.id && !currentCollectionIds.has(collection.id)) {
+      state.collections = state.collections || [];
+      state.collections.push(collection);
+      currentCollectionIds.add(collection.id);
+    }
+  });
+
+  state.stats = mergeDatedRecords(state.stats || {}, backup.stats || {});
+  state.answerOverrides = mergeDatedRecords(state.answerOverrides || {}, backup.answerOverrides || {});
+  if (isNewerRecord(backup.practiceProgress, state.practiceProgress)) {
+    state.practiceProgress = backup.practiceProgress;
+  }
+  const recent = [...(backup.recentPractices || []), ...(state.recentPractices || [])];
+  state.recentPractices = dedupeRecentPractices(recent).slice(0, 8);
+  state.questionDataReport = buildQuestionDataErrorReport();
+}
+
+function mergeDatedRecords(current, incoming) {
+  const merged = { ...current };
+  Object.entries(incoming || {}).forEach(([id, record]) => {
+    if (!merged[id] || isNewerRecord(record, merged[id])) {
+      merged[id] = record;
+    }
+  });
+  return merged;
+}
+
+function isNewerRecord(a, b) {
+  if (!a) return false;
+  if (!b) return true;
+  return getRecordTime(a) >= getRecordTime(b);
+}
+
+function getRecordTime(record) {
+  const value = record?.updatedAt || record?.lastAnsweredAt || record?.lastWrongAt || record?.generatedAt || "";
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function dedupeRecentPractices(items) {
+  const seen = new Set();
+  return items
+    .filter((item) => item && item.title)
+    .sort((a, b) => getRecordTime(b) - getRecordTime(a))
+    .filter((item) => {
+      const key = `${item.title}|${item.bankId || ""}|${item.collectionId || ""}|${item.mode || ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 document.querySelectorAll(".nav-tab").forEach((tab) => {
@@ -2135,7 +2456,7 @@ els.fileInput.addEventListener("change", () => {
   const file = els.fileInput.files[0];
   if (file) handleFile(file);
 });
-els.backToBanks.addEventListener("click", () => showView("banks"));
+els.backToBanks.addEventListener("click", goBack);
 els.backToCollections.addEventListener("click", () => showView("banks"));
 els.quickRandom.addEventListener("click", () => {
   const collection = state.collections?.[0];
@@ -2149,6 +2470,7 @@ els.quickWrong.addEventListener("click", () => showView("wrong"));
 els.quickFavorite.addEventListener("click", () => showView("favorite"));
 els.quickAudit.addEventListener("click", () => showView("audit"));
 els.startWrongReviewButton.addEventListener("click", startWrongReview);
+els.startAuditReviewButton.addEventListener("click", () => startAuditReview());
 els.startCollectionRandom.addEventListener("click", () => {
   const collection = getCurrentCollection();
   if (collection) {
@@ -2199,7 +2521,10 @@ els.editAnswerButton.addEventListener("click", () => {
   if (question) openAnswerEditor(question.id);
 });
 els.saveAnswerEdit.addEventListener("click", saveManualAnswer);
-els.cancelAnswerEdit.addEventListener("click", () => els.answerEditorDialog.close());
+els.cancelAnswerEdit.addEventListener("click", () => {
+  els.saveAnswerEdit.textContent = "保存";
+  els.answerEditorDialog.close();
+});
 els.removeWrongButton.addEventListener("click", () => {
   const question = getQuestion(practiceSession.questionIds[practiceSession.index]);
   if (!question) return;
@@ -2208,6 +2533,11 @@ els.removeWrongButton.addEventListener("click", () => {
   render();
 });
 els.exportButton.addEventListener("click", exportData);
+els.importBackupButton.addEventListener("click", () => els.backupInput.click());
+els.backupInput.addEventListener("change", () => {
+  const file = els.backupInput.files[0];
+  if (file) importLearningRecord(file);
+});
 els.resetProgressButton.addEventListener("click", () => {
   state.stats = {};
   saveState();
@@ -2231,6 +2561,7 @@ window.PracticeParser = {
 };
 
 migrateLoadedState();
+showStorageWarning(!isStorageAvailable());
 saveState();
 render();
 ensureBuiltinModernHistory();

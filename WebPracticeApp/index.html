@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>刷题</title>
-  <link rel="stylesheet" href="./styles.css?v=20260630-wrong-review">
+  <link rel="stylesheet" href="./styles.css?v=20260701-logic-fix">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -14,6 +14,7 @@
           <p class="app-mark">QUIZ · 本地题库</p>
           <h1>本地刷题系统</h1>
           <p>导入题库，按单元刷题，自动记录错题并复刷。</p>
+          <p id="storageNotice" class="storage-notice">学习记录保存在当前浏览器中。请尽量不要使用无痕/隐私模式，否则记录可能丢失。</p>
           <button id="importButton" class="import-button" type="button">导入题库</button>
           <input id="fileInput" type="file" accept=".json,.csv,.txt,.docx,.pdf" hidden>
           <p class="support-text">支持 JSON / CSV / TXT / DOCX / PDF</p>
@@ -138,6 +139,10 @@
           </div>
         </div>
         <div id="answerReport" class="answer-report"></div>
+        <button id="startAuditReviewButton" class="review-start-button" type="button">
+          <strong>开始连续校对</strong>
+          <span id="auditReviewSummary">暂无待校对题</span>
+        </button>
         <div id="auditList" class="question-list"></div>
       </section>
 
@@ -149,7 +154,9 @@
           </div>
         </div>
         <div class="settings-actions">
-          <button id="exportButton" class="ghost-button">导出数据</button>
+          <button id="exportButton" class="ghost-button">导出学习记录</button>
+          <button id="importBackupButton" class="ghost-button">导入学习记录</button>
+          <input id="backupInput" type="file" accept=".json" hidden>
           <button id="resetProgressButton" class="ghost-button">清空答题记录</button>
           <button id="clearAllButton" class="danger-button">清空所有数据</button>
         </div>
@@ -181,6 +188,6 @@
   <script src="./vendor/jszip-global.js"></script>
   <script src="./vendor/pdf.min.js"></script>
   <script src="./vendor/pdf-global.js"></script>
-  <script src="./app.js?v=20260630-answer-fix"></script>
+  <script src="./app.js?v=20260701-logic-fix"></script>
 </body>
 </html>
